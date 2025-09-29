@@ -19,7 +19,7 @@ style:
     active: false
   MagicNumber:
     ignorePropertyDeclaration: true
-    excludes: [ "**/test/**","**/*Configuration.kt", "**/build.gradle.kts" ]
+    excludes: [ "**/test/**","**/*Config.kt", "**/build.gradle.kts" ]
   UnusedPrivateMember:
     excludes: [ "**/test/**" ]
   UnusedPrivateProperty:

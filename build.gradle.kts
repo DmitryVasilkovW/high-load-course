@@ -17,6 +17,7 @@ detekt {
     buildUponDefaultConfig = true // preconfigure defaults
     allRules = false // activate all available (even unstable) rules.
     config.setFrom("$projectDir/detekt/detekt.yml") // point to your custom config defining rules to run, overwriting default behavior
+    autoCorrect = true
 }
 
 tasks.withType<Detekt>().configureEach {
