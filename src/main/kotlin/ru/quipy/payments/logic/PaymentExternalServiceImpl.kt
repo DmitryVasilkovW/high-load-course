@@ -12,12 +12,13 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import org.slf4j.Logger
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -183,7 +184,7 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     companion object {
-        val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)!!
+        val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
         val emptyBody = ByteArray(0).toRequestBody(null)
         val mapper = ObjectMapper().registerKotlinModule()
