@@ -8,8 +8,8 @@ import ru.quipy.common.utils.ratelimiter.RateLimiter
 class CountingRateLimiter(
     private val rate: Int,
     private val window: Long,
-    private val timeUnit: TimeUnit = TimeUnit.SECONDS
-): RateLimiter {
+    private val timeUnit: TimeUnit = TimeUnit.SECONDS,
+) : RateLimiter {
 
     var internal = RlInternal(System.currentTimeMillis(), rate)
 

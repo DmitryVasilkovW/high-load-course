@@ -45,7 +45,7 @@ class SlowStartRateLimiter(
                         semaphore.release()
                     }.onFailure { th -> logger.error("Failed while releasing permits", th) }
                 }
-                logger.trace("Rate limiter ${rateLimiterNum}. Released $permitsToRelease permits")
+                logger.trace("Rate limiter $rateLimiterNum. Released $permitsToRelease permits")
 
                 if (slowStartOn && currentRate < targetRate) {
                     currentRate = minOf(targetRate, currentRate * 2)
@@ -55,7 +55,6 @@ class SlowStartRateLimiter(
             }
         }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
     }
-
 
     override fun tick() = semaphore.tryAcquire()
 
