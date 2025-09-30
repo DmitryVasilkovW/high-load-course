@@ -36,7 +36,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder().build()
     private val windowRateLimiter = SlidingWindowRateLimiter(
         rate = rateLimitPerSec.toLong(),
-        window = Duration.ofSeconds(1)
+        window = Duration.ofSeconds(1),
     )
 
     private val host = parseHost(paymentProviderHostPort)
@@ -44,7 +44,7 @@ class PaymentExternalSystemAdapterImpl(
     private val baseUrlComponents = mapOf(
         "serviceName" to serviceName,
         "token" to token,
-        "accountName" to accountName
+        "accountName" to accountName,
     )
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
@@ -54,7 +54,7 @@ class PaymentExternalSystemAdapterImpl(
         logger.warn(
             "[{}] Submitting payment request for payment {}",
             accountName,
-            paymentId
+            paymentId,
         )
 
         val transactionId = UUID.randomUUID()
@@ -69,7 +69,7 @@ class PaymentExternalSystemAdapterImpl(
             "[{}] Submit: {} , txId: {}",
             accountName,
             paymentId,
-            transactionId
+            transactionId,
         )
 
         paymentScope.launch {
@@ -108,7 +108,7 @@ class PaymentExternalSystemAdapterImpl(
                         transactionId,
                         paymentId,
                         response.code,
-                        response.body?.string()
+                        response.body?.string(),
                     )
                     ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
                 }
@@ -119,7 +119,7 @@ class PaymentExternalSystemAdapterImpl(
                     transactionId,
                     paymentId,
                     body.result,
-                    body.message
+                    body.message,
                 )
 
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
@@ -134,7 +134,7 @@ class PaymentExternalSystemAdapterImpl(
                 accountName,
                 transactionId,
                 paymentId,
-                e
+                e,
             )
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
@@ -145,7 +145,7 @@ class PaymentExternalSystemAdapterImpl(
                 accountName,
                 transactionId,
                 paymentId,
-                e
+                e,
             )
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = e.message)

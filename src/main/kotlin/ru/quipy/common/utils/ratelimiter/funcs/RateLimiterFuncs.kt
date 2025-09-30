@@ -14,5 +14,5 @@ fun makeRateLimiter(accountName: String, rate: Int, timeUnit: TimeUnit = TimeUni
         .build()
 
     val rateLimiterRegistry = RateLimiterRegistry.of(config)
-    return rateLimiterRegistry.rateLimiter("rateLimiter:${accountName}")
+    return rateLimiterRegistry.rateLimiter("rateLimiter:$accountName")
 }

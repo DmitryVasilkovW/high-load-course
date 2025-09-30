@@ -60,7 +60,7 @@ class SlidingWindowRateLimiter(
 
     data class Measure(
         val value: Long,
-        val timestamp: Long
+        val timestamp: Long,
     ) : Comparable<Measure> {
         override fun compareTo(other: Measure): Int {
             return timestamp.compareTo(other.timestamp)

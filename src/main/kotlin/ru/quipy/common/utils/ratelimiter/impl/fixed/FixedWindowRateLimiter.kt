@@ -38,7 +38,7 @@ class FixedWindowRateLimiter(
                         semaphore.release()
                     }.onFailure { th -> logger.error("Failed while releasing permits", th) }
                 }
-                logger.trace("Semaphore ${semaphoreNumber}. Released $permitsToRelease permits")
+                logger.trace("Semaphore $semaphoreNumber. Released $permitsToRelease permits")
 
                 delay(nextExpectedWakeUp - System.currentTimeMillis())
             }

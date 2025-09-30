@@ -19,7 +19,6 @@ class PaymentSubscriber {
 
     val logger: Logger = LoggerFactory.getLogger(PaymentSubscriber::class.java)
 
-
     @Autowired
     lateinit var subscriptionsManager: AggregateSubscriptionsManager
 
@@ -31,16 +30,16 @@ class PaymentSubscriber {
         subscriptionsManager.createSubscriber(
             PaymentAggregate::class,
             "orders:payment-subscriber",
-            retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)
+            retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT),
         ) {
             `when`(PaymentProcessedEvent::class) { event ->
                 appExecutor.submit {
                     logger.trace(
                         "Payment results. OrderId ${event.orderId}, succeeded: ${event.success}, txId: ${event.transactionId}, reason: ${event.reason}, duration: ${
                             Duration.ofMillis(
-                                event.createdAt - event.submittedAt
+                                event.createdAt - event.submittedAt,
                             ).toSeconds()
-                        }, spent in queue: ${event.spentInQueueDuration.toSeconds()}"
+                        }, spent in queue: ${event.spentInQueueDuration.toSeconds()}",
                     )
                 }
             }

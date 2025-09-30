@@ -45,7 +45,7 @@ class PaymentAggregateState : AggregateState<UUID, PaymentAggregate> {
             event.processedAt,
             event.transactionId,
             event.reason,
-            event.success
+            event.success,
         )
         updatedAt = createdAt
     }

@@ -29,7 +29,7 @@ class OrderPayer {
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(8_000),
         NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
+        CallerBlockingRejectedExecutionHandler(),
     )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
@@ -39,7 +39,7 @@ class OrderPayer {
                 it.create(
                     paymentId,
                     orderId,
-                    amount
+                    amount,
                 )
             }
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
