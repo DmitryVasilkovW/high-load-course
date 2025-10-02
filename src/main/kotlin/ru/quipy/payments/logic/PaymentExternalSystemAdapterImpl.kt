@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -19,6 +20,7 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import org.slf4j.Logger
+import ru.quipy.payments.metric.MetricBuilder
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -26,6 +28,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
+    private val metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
@@ -49,6 +52,8 @@ class PaymentExternalSystemAdapterImpl(
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
+
+    private val httpHandledRequestsTotalCounter = metricBuilder.buildHttpHandledRequestsTotalCounter()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.warn(
@@ -139,6 +144,7 @@ class PaymentExternalSystemAdapterImpl(
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
             }
+            httpHandledRequestsTotalCounter.increment()
         } catch (e: Exception) {
             logger.error(
                 "[{}] Payment failed for txId: {}, payment: {}",
