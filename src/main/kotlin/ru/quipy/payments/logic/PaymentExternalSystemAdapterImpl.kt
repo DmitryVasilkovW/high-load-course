@@ -53,13 +53,10 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
 
-    private val httpHandledRequestsTotalAllCounter = metricBuilder.buildHttpHandledRequestsTotalCounter()
     private val httpHandledRequestsTotalAccountCounter = metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
-    private val httpRequestsTotalAllCounter = metricBuilder.buildHttpRequestsTotalCounter()
     private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        httpRequestsTotalAllCounter.increment()
         httpRequestsTotalAccountCounter.increment()
 
         logger.warn(
@@ -150,7 +147,6 @@ class PaymentExternalSystemAdapterImpl(
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
             }
-            httpHandledRequestsTotalAllCounter.increment()
             httpHandledRequestsTotalAccountCounter.increment()
         } catch (e: Exception) {
             logger.error(
