@@ -1,12 +1,10 @@
-FROM gradle:8.5-jdk17 AS build
+FROM gradle:9.0.0-jdk17 AS build
+
+COPY . /app
 
 WORKDIR /app
-COPY build.gradle.kts build.gradle.kts
-COPY settings.gradle.kts settings.gradle.kts
 
-COPY src src
-
-RUN gradle build --no-daemon
+RUN ./gradlew clean build
 
 FROM openjdk:17-jdk-slim
 

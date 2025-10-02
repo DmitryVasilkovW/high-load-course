@@ -29,6 +29,7 @@ tasks.withType<Detekt>().configureEach {
 }
 
 repositories {
+    gradlePluginPortal()
     mavenCentral()
 }
 
