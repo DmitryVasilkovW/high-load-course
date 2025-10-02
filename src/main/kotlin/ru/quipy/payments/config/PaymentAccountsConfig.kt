@@ -15,6 +15,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.*
 import ru.quipy.payments.logic.PaymentExternalSystemAdapterImpl.Companion.mapper
+import ru.quipy.payments.metric.MetricBuilder
 
 @Configuration
 class PaymentAccountsConfig {
@@ -34,6 +35,7 @@ class PaymentAccountsConfig {
     @Bean
     fun accountAdapters(
         paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+        metricBuilder: MetricBuilder,
     ): List<PaymentExternalSystemAdapter> {
         val request = HttpRequest.newBuilder()
             .uri(URI("http://$paymentProviderHostPort/external/accounts?serviceName=$serviceName&token=$token"))
@@ -56,6 +58,7 @@ class PaymentAccountsConfig {
                     paymentService,
                     paymentProviderHostPort,
                     token,
+                    metricBuilder,
                 )
             }
     }
