@@ -2,6 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -12,12 +13,14 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import org.slf4j.Logger
+import ru.quipy.payments.metric.MetricBuilder
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -25,6 +28,7 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
+    private val metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
@@ -35,7 +39,7 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder().build()
     private val windowRateLimiter = SlidingWindowRateLimiter(
         rate = rateLimitPerSec.toLong(),
-        window = Duration.ofSeconds(1)
+        window = Duration.ofSeconds(1),
     )
 
     private val host = parseHost(paymentProviderHostPort)
@@ -43,17 +47,22 @@ class PaymentExternalSystemAdapterImpl(
     private val baseUrlComponents = mapOf(
         "serviceName" to serviceName,
         "token" to token,
-        "accountName" to accountName
+        "accountName" to accountName,
     )
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
 
+    private val httpHandledRequestsTotalAccountCounter = metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
+    private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+        httpRequestsTotalAccountCounter.increment()
+
         logger.warn(
             "[{}] Submitting payment request for payment {}",
             accountName,
-            paymentId
+            paymentId,
         )
 
         val transactionId = UUID.randomUUID()
@@ -68,7 +77,7 @@ class PaymentExternalSystemAdapterImpl(
             "[{}] Submit: {} , txId: {}",
             accountName,
             paymentId,
-            transactionId
+            transactionId,
         )
 
         paymentScope.launch {
@@ -107,7 +116,7 @@ class PaymentExternalSystemAdapterImpl(
                         transactionId,
                         paymentId,
                         response.code,
-                        response.body?.string()
+                        response.body?.string(),
                     )
                     ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
                 }
@@ -118,7 +127,7 @@ class PaymentExternalSystemAdapterImpl(
                     transactionId,
                     paymentId,
                     body.result,
-                    body.message
+                    body.message,
                 )
 
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
@@ -127,13 +136,14 @@ class PaymentExternalSystemAdapterImpl(
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
             }
+            httpHandledRequestsTotalAccountCounter.increment()
         } catch (e: SocketTimeoutException) {
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
                 accountName,
                 transactionId,
                 paymentId,
-                e
+                e,
             )
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
@@ -144,7 +154,7 @@ class PaymentExternalSystemAdapterImpl(
                 accountName,
                 transactionId,
                 paymentId,
-                e
+                e,
             )
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = e.message)
@@ -183,7 +193,7 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     companion object {
-        val logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)!!
+        val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
         val emptyBody = ByteArray(0).toRequestBody(null)
         val mapper = ObjectMapper().registerKotlinModule()

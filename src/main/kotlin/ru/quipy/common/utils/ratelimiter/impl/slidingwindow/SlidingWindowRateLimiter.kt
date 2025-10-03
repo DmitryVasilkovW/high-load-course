@@ -1,15 +1,16 @@
-package ru.quipy.common.utils
+package ru.quipy.common.utils.ratelimiter.impl.slidingwindow
 
+import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.time.Duration
-import java.util.concurrent.Executors
-import java.util.concurrent.PriorityBlockingQueue
-import java.util.concurrent.atomic.AtomicLong
+import ru.quipy.common.utils.ratelimiter.RateLimiter
 
 class SlidingWindowRateLimiter(
     private val rate: Long,
@@ -59,7 +60,7 @@ class SlidingWindowRateLimiter(
 
     data class Measure(
         val value: Long,
-        val timestamp: Long
+        val timestamp: Long,
     ) : Comparable<Measure> {
         override fun compareTo(other: Measure): Int {
             return timestamp.compareTo(other.timestamp)

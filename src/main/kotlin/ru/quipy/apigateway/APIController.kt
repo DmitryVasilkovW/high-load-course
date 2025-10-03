@@ -62,13 +62,12 @@ class APIController {
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
         return PaymentSubmissionDto(createdAt, paymentId)
     }
 
     class PaymentSubmissionDto(
         val timestamp: Long,
-        val transactionId: UUID
+        val transactionId: UUID,
     )
 }
