@@ -136,6 +136,7 @@ class PaymentExternalSystemAdapterImpl(
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
             }
+            httpHandledRequestsTotalAccountCounter.increment()
         } catch (e: SocketTimeoutException) {
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
@@ -147,7 +148,6 @@ class PaymentExternalSystemAdapterImpl(
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
             }
-            httpHandledRequestsTotalAccountCounter.increment()
         } catch (e: Exception) {
             logger.error(
                 "[{}] Payment failed for txId: {}, payment: {}",
