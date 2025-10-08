@@ -2,7 +2,6 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -32,6 +31,8 @@ class PaymentExternalSystemAdapterImpl(
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
+
+    @Suppress("UnusedPrivateProperty")
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
@@ -53,8 +54,10 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
 
-    private val httpHandledRequestsTotalAccountCounter = metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
-    private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+    private val httpHandledRequestsTotalAccountCounter =
+        metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
+    private val httpRequestsTotalAccountCounter =
+        metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         httpRequestsTotalAccountCounter.increment()
@@ -85,6 +88,7 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
+    @Suppress("LongMethod", "NestedBlockDepth")
     private suspend fun handleExternalPaymentProcessingRequest(transactionId: UUID, paymentId: UUID, amount: Int) {
         try {
             semaphore.acquire()
@@ -178,7 +182,7 @@ class PaymentExternalSystemAdapterImpl(
         return if (parts.size == 2) {
             parts[1].toInt()
         } else {
-            80
+            PORT
         }
     }
 
@@ -193,6 +197,8 @@ class PaymentExternalSystemAdapterImpl(
     }
 
     companion object {
+        private const val PORT = 80
+
         val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
         val emptyBody = ByteArray(0).toRequestBody(null)

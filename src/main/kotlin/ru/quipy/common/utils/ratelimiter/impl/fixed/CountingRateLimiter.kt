@@ -34,6 +34,7 @@ class CountingRateLimiter(
         var permits: Int = 0,
     )
 
+    @Suppress("UnusedPrivateProperty")
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(CountingRateLimiter::class.java)
     }

@@ -19,7 +19,7 @@ class SlidingWindowRateLimiter(
     private val rateLimiterScope = CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
     private val sum = AtomicLong(0)
-    private val queue = PriorityBlockingQueue<Measure>(10_000)
+    private val queue = PriorityBlockingQueue<Measure>(QUEUE_CAPACITY)
     private val windowMillis = window.toMillis()
 
     init {
@@ -27,16 +27,15 @@ class SlidingWindowRateLimiter(
             while (true) {
                 val head = queue.peek()
                 val winStart = System.currentTimeMillis() - windowMillis
-                if (head == null) {
-                    delay(1L)
-                    continue
+                when {
+                    head == null -> delay(1L)
+                    head.timestamp > winStart -> delay(head.timestamp - winStart)
+
+                    else -> {
+                        sum.addAndGet(-1)
+                        queue.take()
+                    }
                 }
-                if (head.timestamp > winStart) {
-                    delay(head.timestamp - winStart)
-                    continue
-                }
-                sum.addAndGet(-1)
-                queue.take()
             }
         }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
     }
@@ -54,7 +53,7 @@ class SlidingWindowRateLimiter(
 
     fun tickBlocking() {
         while (!tick()) {
-            Thread.sleep(10)
+            Thread.sleep(MS_TO_WAIT)
         }
     }
 
@@ -68,6 +67,8 @@ class SlidingWindowRateLimiter(
     }
 
     companion object {
+        private const val MS_TO_WAIT = 10L
+        private const val QUEUE_CAPACITY = 10_000
         private val logger: Logger = LoggerFactory.getLogger(SlidingWindowRateLimiter::class.java)
     }
 }

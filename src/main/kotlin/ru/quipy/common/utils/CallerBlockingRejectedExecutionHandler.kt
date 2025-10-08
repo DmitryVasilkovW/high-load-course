@@ -8,7 +8,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 class CallerBlockingRejectedExecutionHandler(
-    private val maxWait: Duration = Duration.ofMinutes(30),
+    private val maxWait: Duration = Duration.ofMinutes(MINUTS_TO_WAIT),
 ) : RejectedExecutionHandler {
 
     // Even if event is rejected we will still keep it, trying to put in queue so that not to lose it!
@@ -30,6 +30,7 @@ class CallerBlockingRejectedExecutionHandler(
     }
 
     companion object {
+        private const val MINUTS_TO_WAIT = 30L
         val logger = LoggerFactory.getLogger(CallerBlockingRejectedExecutionHandler::class.java)!!
     }
 }

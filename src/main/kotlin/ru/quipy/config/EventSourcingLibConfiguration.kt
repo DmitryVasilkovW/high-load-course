@@ -70,10 +70,17 @@ class EventSourcingLibConfiguration {
         val jettyServletWebServerFactory = JettyServletWebServerFactory()
 
         val c = JettyServerCustomizer {
-            (it.connectors[0].getConnectionFactory("h2c") as HTTP2CServerConnectionFactory).maxConcurrentStreams = 10_000_000
+            (
+                it.connectors[0].getConnectionFactory("h2c")
+                    as HTTP2CServerConnectionFactory
+                ).maxConcurrentStreams = MAX_CONCURRENT_STREAMS
         }
 
         jettyServletWebServerFactory.serverCustomizers.add(c)
         return jettyServletWebServerFactory
+    }
+
+    companion object {
+        private const val MAX_CONCURRENT_STREAMS = 10_000_000
     }
 }
