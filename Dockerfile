@@ -1,13 +1,15 @@
-FROM maven:3.9.9-eclipse-temurin-17 AS build
+FROM gradle:9.0.0-jdk17 AS build
 
 WORKDIR /app
-COPY pom.xml .
-RUN mvn dependency:go-offline
-COPY src src
-RUN mvn package
+
+COPY . /app
+
+RUN ./gradlew clean build
 
 FROM openjdk:17-jdk-slim
 
-COPY --from=build /app/target/*.jar /high-load-course.jar
+WORKDIR /app
+
+COPY --from=build /app/build/libs/*.jar /high-load-course.jar
 
 CMD ["java", "-jar", "/high-load-course.jar"]
