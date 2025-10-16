@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . /app
 
-RUN ./gradlew clean build
+RUN ./gradlew clean build --no-daemon
 
 FROM openjdk:17-jdk-slim
 
