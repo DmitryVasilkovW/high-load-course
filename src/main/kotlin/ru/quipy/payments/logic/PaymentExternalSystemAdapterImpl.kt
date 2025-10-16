@@ -18,6 +18,10 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import org.slf4j.Logger
 import ru.quipy.payments.metric.MetricBuilder
 
@@ -51,6 +55,13 @@ class PaymentExternalSystemAdapterImpl(
         "accountName" to accountName,
     )
 
+    private val paymentExecutor: ThreadPoolExecutor = ThreadPoolExecutor(
+        parallelRequests,
+        parallelRequests,
+        60L, TimeUnit.SECONDS,
+        LinkedBlockingQueue<Runnable>(),
+    )
+
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
 
@@ -59,6 +70,7 @@ class PaymentExternalSystemAdapterImpl(
     private val httpRequestsTotalAccountCounter =
         metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
 
+    @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         httpRequestsTotalAccountCounter.increment()
 
@@ -76,16 +88,31 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
+        paymentExecutor.submit {
+            try {
+                paymentExecutor.submit {
+                    try {
+                        paymentScope.launch {
+                            handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
+                        }
+                    } catch (e: Exception) {
+                        logger.error("[$accountName] Unhandled exception in payment executor for $paymentId", e)
+                    }
+                }
+            } catch (e: RejectedExecutionException) {
+                logger.warn(
+                    "[$accountName] Rejecting payment $paymentId because executor queue is full. " +
+                        "Queue size: ${paymentExecutor.queue.size}",
+                )
+            }
+        }
+
         logger.info(
             "[{}] Submit: {} , txId: {}",
             accountName,
             paymentId,
             transactionId,
         )
-
-        paymentScope.launch {
-            handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
-        }
     }
 
     @Suppress("LongMethod", "NestedBlockDepth")
