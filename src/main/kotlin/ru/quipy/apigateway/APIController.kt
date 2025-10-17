@@ -73,7 +73,7 @@ class APIController {
             )
             ResponseEntity.ok(responseDto)
         } catch (_: RejectedExecutionException) {
-            val retryTime = System.currentTimeMillis() + 1000
+            val retryTime = System.currentTimeMillis() + 500
             ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", retryTime.toString())
