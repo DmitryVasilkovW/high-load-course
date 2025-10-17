@@ -26,8 +26,8 @@ class OrderPayer {
         16,
         16,
         0L,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(5),
+        TimeUnit.MICROSECONDS,
+        LinkedBlockingQueue(11),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler(),
     )
@@ -42,7 +42,7 @@ class OrderPayer {
                     amount,
                 )
             }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+            logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
 
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
