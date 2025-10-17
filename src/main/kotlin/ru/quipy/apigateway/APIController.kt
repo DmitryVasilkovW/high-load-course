@@ -3,19 +3,20 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import java.time.Duration
 import java.util.*
-import org.springframework.web.bind.annotation.PathVariable
-import org.springframework.web.bind.annotation.PostMapping
-import org.springframework.web.bind.annotation.RequestBody
-import org.springframework.web.bind.annotation.RequestParam
-import org.springframework.web.bind.annotation.RestController
 
 @RestController
 class APIController {
-
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
+
+    private val rateLimiter = SlidingWindowRateLimiter(30, Duration.ofSeconds(3))
 
     @Autowired
     private lateinit var orderRepository: OrderRepository
@@ -59,19 +60,30 @@ class APIController {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
+
+        val retryTime = System.currentTimeMillis() + 1000
+        rateLimiter.tick().takeIf { it } ?: return ResponseEntity
+            .status(HttpStatus.TOO_MANY_REQUESTS)
+            .header("Retry-After", retryTime.toString())
+            .build()
+
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        return PaymentSubmissionDto(createdAt, paymentId)
+        val responseDto = PaymentSubmissionDto(
+            timestamp = createdAt,
+            transactionId = paymentId
+        )
+        return ResponseEntity.ok(responseDto)
     }
 
     class PaymentSubmissionDto(
         val timestamp: Long,
-        val transactionId: UUID,
+        val transactionId: UUID
     )
 }

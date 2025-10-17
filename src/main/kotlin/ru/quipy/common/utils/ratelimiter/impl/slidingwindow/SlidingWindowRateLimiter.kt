@@ -1,9 +1,5 @@
 package ru.quipy.common.utils.ratelimiter.impl.slidingwindow
 
-import java.time.Duration
-import java.util.concurrent.Executors
-import java.util.concurrent.PriorityBlockingQueue
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -11,10 +7,14 @@ import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.RateLimiter
+import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 
 class SlidingWindowRateLimiter(
     private val rate: Long,
-    private val window: Duration,
+    window: Duration,
 ) : RateLimiter {
     private val rateLimiterScope = CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
@@ -53,7 +53,7 @@ class SlidingWindowRateLimiter(
 
     fun tickBlocking() {
         while (!tick()) {
-            Thread.sleep(MS_TO_WAIT)
+            Thread.sleep(DELAY_DURATION)
         }
     }
 
@@ -67,8 +67,8 @@ class SlidingWindowRateLimiter(
     }
 
     companion object {
-        private const val MS_TO_WAIT = 10L
         private const val QUEUE_CAPACITY = 10_000
+        private const val DELAY_DURATION = 1L
         private val logger: Logger = LoggerFactory.getLogger(SlidingWindowRateLimiter::class.java)
     }
 }
