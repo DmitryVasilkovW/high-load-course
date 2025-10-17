@@ -25,9 +25,9 @@ import java.util.*
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
-    paymentProviderHostPort: String,
-    token: String,
-    metricBuilder: MetricBuilder,
+    private val paymentProviderHostPort: String,
+    private val token: String,
+    private val metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
@@ -55,8 +55,10 @@ class PaymentExternalSystemAdapterImpl(
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
     private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
 
+    @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         httpRequestsTotalAccountCounter.increment()
+
         logger.warn(
             "[{}] Submitting payment request for payment {}",
             accountName,
@@ -83,6 +85,7 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
+    @Suppress("LongMethod", "NestedBlockDepth")
     private suspend fun handleExternalPaymentProcessingRequest(transactionId: UUID, paymentId: UUID, amount: Int) {
         try {
             semaphore.acquire()
@@ -176,7 +179,7 @@ class PaymentExternalSystemAdapterImpl(
         return if (parts.size == 2) {
             parts[1].toInt()
         } else {
-            80
+            PORT
         }
     }
 
@@ -193,6 +196,8 @@ class PaymentExternalSystemAdapterImpl(
     private fun now() = System.currentTimeMillis()
 
     companion object {
+        private const val PORT = 80
+
         val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
         val emptyBody = ByteArray(0).toRequestBody(null)
