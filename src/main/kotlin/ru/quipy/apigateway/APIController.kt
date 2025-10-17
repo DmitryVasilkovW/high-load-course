@@ -6,17 +6,14 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
-import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
-import java.time.Duration
 import java.util.*
+import java.util.concurrent.RejectedExecutionException
 
 @RestController
 class APIController {
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
-
-    private val rateLimiter = SlidingWindowRateLimiter(30, Duration.ofSeconds(3))
 
     @Autowired
     private lateinit var orderRepository: OrderRepository
@@ -63,23 +60,25 @@ class APIController {
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
 
-        val retryTime = System.currentTimeMillis() + 1000
-        rateLimiter.tick().takeIf { it } ?: return ResponseEntity
-            .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", retryTime.toString())
-            .build()
-
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
         } ?: throw IllegalArgumentException("No such order $orderId")
 
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        val responseDto = PaymentSubmissionDto(
-            timestamp = createdAt,
-            transactionId = paymentId
-        )
-        return ResponseEntity.ok(responseDto)
+        return try {
+            val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+            val responseDto = PaymentSubmissionDto(
+                timestamp = createdAt,
+                transactionId = paymentId
+            )
+            ResponseEntity.ok(responseDto)
+        } catch (_: RejectedExecutionException) {
+            val retryTime = System.currentTimeMillis() + 1000
+            ResponseEntity
+                .status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After", retryTime.toString())
+                .build()
+        }
     }
 
     class PaymentSubmissionDto(
