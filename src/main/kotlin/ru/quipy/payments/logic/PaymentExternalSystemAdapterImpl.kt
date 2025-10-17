@@ -11,33 +11,26 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.payments.metric.MetricBuilder
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.RejectedExecutionException
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import org.slf4j.Logger
-import ru.quipy.payments.metric.MetricBuilder
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
-    private val paymentProviderHostPort: String,
-    private val token: String,
-    private val metricBuilder: MetricBuilder,
+    paymentProviderHostPort: String,
+    token: String,
+    metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
-
-    @Suppress("UnusedPrivateProperty")
-    private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
@@ -55,25 +48,15 @@ class PaymentExternalSystemAdapterImpl(
         "accountName" to accountName,
     )
 
-    private val paymentExecutor: ThreadPoolExecutor = ThreadPoolExecutor(
-        parallelRequests,
-        parallelRequests,
-        60L, TimeUnit.SECONDS,
-        LinkedBlockingQueue<Runnable>(),
-    )
-
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
-    private val httpRequestsTotalAccountCounter =
-        metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+    private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
 
-    @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         httpRequestsTotalAccountCounter.increment()
-
         logger.warn(
             "[{}] Submitting payment request for payment {}",
             accountName,
@@ -88,34 +71,18 @@ class PaymentExternalSystemAdapterImpl(
             it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
         }
 
-        paymentExecutor.submit {
-            try {
-                paymentExecutor.submit {
-                    try {
-                        paymentScope.launch {
-                            handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
-                        }
-                    } catch (e: Exception) {
-                        logger.error("[$accountName] Unhandled exception in payment executor for $paymentId", e)
-                    }
-                }
-            } catch (e: RejectedExecutionException) {
-                logger.warn(
-                    "[$accountName] Rejecting payment $paymentId because executor queue is full. " +
-                        "Queue size: ${paymentExecutor.queue.size}",
-                )
-            }
-        }
-
         logger.info(
             "[{}] Submit: {} , txId: {}",
             accountName,
             paymentId,
             transactionId,
         )
+
+        paymentScope.launch {
+            handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
+        }
     }
 
-    @Suppress("LongMethod", "NestedBlockDepth")
     private suspend fun handleExternalPaymentProcessingRequest(transactionId: UUID, paymentId: UUID, amount: Int) {
         try {
             semaphore.acquire()
@@ -223,6 +190,8 @@ class PaymentExternalSystemAdapterImpl(
         paymentScope.cancel()
     }
 
+    private fun now() = System.currentTimeMillis()
+
     companion object {
         private const val PORT = 80
 
@@ -232,5 +201,3 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
     }
 }
-
-fun now() = System.currentTimeMillis()
