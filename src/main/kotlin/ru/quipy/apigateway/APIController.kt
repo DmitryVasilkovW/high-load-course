@@ -81,7 +81,7 @@ class APIController {
                 transactionId = paymentId,
             )
             ResponseEntity.ok(responseDto)
-        } catch (_: RejectedExecutionException) {
+        } catch (_: Exception) {
             val retryTime = System.currentTimeMillis() + 1000
             ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
