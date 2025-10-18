@@ -63,11 +63,11 @@ class APIController {
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
 
-        val retryTime = System.currentTimeMillis() + 1000
-        rateLimiter.tick().takeIf { it } ?: return ResponseEntity
-            .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", retryTime.toString())
-            .build()
+//        val retryTime = System.currentTimeMillis() + 1000
+//        rateLimiter.tick().takeIf { it } ?: return ResponseEntity
+//            .status(HttpStatus.TOO_MANY_REQUESTS)
+//            .header("Retry-After", retryTime.toString())
+//            .build()
 
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
