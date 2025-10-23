@@ -1,5 +1,6 @@
 package ru.quipy.payments.logic
 
+import java.time.Duration
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -12,6 +13,7 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
 
 @Service
 class OrderPayer {
@@ -19,20 +21,30 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
+    private var rateLimiter: LeakingBucketRateLimiter = LeakingBucketRateLimiter(
+        11,
+        window = Duration.ofSeconds(1),
+        bucketSize = 270,
+    )
+
     @Autowired
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        4,
-        4,
+        16,
+        16,
         0L,
-        TimeUnit.MICROSECONDS,
-        LinkedBlockingQueue(128),
+        TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue(1500),
         NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler(),
+        CallerBlockingRejectedExecutionHandler()
     )
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
+        if (!rateLimiter.tick()) {
+            return null
+        }
+
         val createdAt = System.currentTimeMillis()
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
