@@ -13,13 +13,14 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
+import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -35,10 +36,6 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder().build()
-    private val windowRateLimiter = SlidingWindowRateLimiter(
-        rate = rateLimitPerSec.toLong(),
-        window = Duration.ofSeconds(1),
-    )
 
     private val host = parseHost(paymentProviderHostPort)
     private val port = parsePort(paymentProviderHostPort)
@@ -50,6 +47,13 @@ class PaymentExternalSystemAdapterImpl(
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
+
+    private val rateLimiter = TokenBucketRateLimiter(
+        rate = 16,
+        bucketMaxCapacity = 16,
+        window = 1L,
+        timeUnit = TimeUnit.SECONDS
+    )
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
@@ -91,7 +95,7 @@ class PaymentExternalSystemAdapterImpl(
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
 
-            windowRateLimiter.tickBlocking()
+            rateLimiter.tick()
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)

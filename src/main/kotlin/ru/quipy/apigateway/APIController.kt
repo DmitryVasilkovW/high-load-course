@@ -9,12 +9,11 @@ import org.springframework.web.bind.annotation.*
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.util.*
-import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
-import java.util.concurrent.RejectedExecutionException
 
 @RestController
 class APIController {
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
+
     @Autowired
     private lateinit var orderRepository: OrderRepository
 
@@ -57,16 +56,28 @@ class APIController {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
-        val paymentId = UUID.randomUUID()
-        val order = orderRepository.findById(orderId)?.let {
-            orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
-            it
-        } ?: throw IllegalArgumentException("No such order $orderId")
+    fun initiateOrderPayment(
+        @PathVariable orderId: UUID,
+        @RequestParam deadline: Long
+    ): ResponseEntity<PaymentSubmissionDto> {
+        val targetOrder = requireNotNull(orderRepository.findById(orderId)) {
+            "No such order $orderId"
+        }
 
+        orderRepository.save(targetOrder.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
 
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        return PaymentSubmissionDto(createdAt, paymentId)
+        return run {
+            val newPaymentId = UUID.randomUUID()
+            val creationTimestamp = orderPayer.processPayment(orderId, targetOrder.price, newPaymentId, deadline)
+
+            when (creationTimestamp) {
+                null -> ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After", "30")
+                    .build()
+
+                else -> ResponseEntity.ok(PaymentSubmissionDto(creationTimestamp, newPaymentId))
+            }
+        }
     }
 
     class PaymentSubmissionDto(
