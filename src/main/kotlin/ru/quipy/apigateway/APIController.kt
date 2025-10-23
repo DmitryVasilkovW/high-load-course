@@ -1,6 +1,5 @@
 package ru.quipy.apigateway
 
-import java.time.Duration
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -11,13 +10,10 @@ import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import java.util.*
 import java.util.concurrent.RejectedExecutionException
-import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 
 @RestController
 class APIController {
     val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
-    private val rateLimiter = SlidingWindowRateLimiter(5, Duration.ofSeconds(3))
-
     @Autowired
     private lateinit var orderRepository: OrderRepository
 
@@ -63,12 +59,6 @@ class APIController {
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
 
-//        val retryTime = System.currentTimeMillis() + 1000
-//        rateLimiter.tick().takeIf { it } ?: return ResponseEntity
-//            .status(HttpStatus.TOO_MANY_REQUESTS)
-//            .header("Retry-After", retryTime.toString())
-//            .build()
-
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
@@ -80,13 +70,14 @@ class APIController {
                 timestamp = createdAt,
                 transactionId = paymentId,
             )
+
             ResponseEntity.ok(responseDto)
-        } catch (_: Exception) {
+        } catch (_: RejectedExecutionException) {
             val retryTime = System.currentTimeMillis() + 1000
             ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
                 .header("Retry-After", retryTime.toString())
-                .build()
+                .body(PaymentSubmissionDto(System.currentTimeMillis(), paymentId))
         }
     }
 

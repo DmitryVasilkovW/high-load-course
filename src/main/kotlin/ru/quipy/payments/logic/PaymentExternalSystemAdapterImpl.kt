@@ -25,9 +25,9 @@ import java.util.*
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
-    private val paymentProviderHostPort: String,
-    private val token: String,
-    private val metricBuilder: MetricBuilder,
+    paymentProviderHostPort: String,
+    token: String,
+    metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
