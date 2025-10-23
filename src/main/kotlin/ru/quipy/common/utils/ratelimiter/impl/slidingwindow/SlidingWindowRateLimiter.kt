@@ -1,9 +1,5 @@
 package ru.quipy.common.utils.ratelimiter.impl.slidingwindow
 
-import java.time.Duration
-import java.util.concurrent.Executors
-import java.util.concurrent.PriorityBlockingQueue
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
@@ -11,6 +7,10 @@ import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.RateLimiter
+import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 
 class SlidingWindowRateLimiter(
     private val rate: Long,
@@ -19,7 +19,7 @@ class SlidingWindowRateLimiter(
     private val rateLimiterScope = CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
     private val sum = AtomicLong(0)
-    private val queue = PriorityBlockingQueue<Measure>(10_000)
+    private val queue = PriorityBlockingQueue<Measure>(QUEUE_CAPACITY)
     private val windowMillis = window.toMillis()
 
     init {
@@ -27,16 +27,15 @@ class SlidingWindowRateLimiter(
             while (true) {
                 val head = queue.peek()
                 val winStart = System.currentTimeMillis() - windowMillis
-                if (head == null) {
-                    delay(1L)
-                    continue
+                when {
+                    head == null -> delay(1L)
+                    head.timestamp > winStart -> delay(head.timestamp - winStart)
+
+                    else -> {
+                        sum.addAndGet(-1)
+                        queue.take()
+                    }
                 }
-                if (head.timestamp > winStart) {
-                    delay(head.timestamp - winStart)
-                    continue
-                }
-                sum.addAndGet(-1)
-                queue.take()
             }
         }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
     }
@@ -54,7 +53,7 @@ class SlidingWindowRateLimiter(
 
     fun tickBlocking() {
         while (!tick()) {
-            Thread.sleep(10)
+            Thread.sleep(DELAY_DURATION)
         }
     }
 
@@ -68,6 +67,8 @@ class SlidingWindowRateLimiter(
     }
 
     companion object {
+        private const val QUEUE_CAPACITY = 10_000
+        private const val DELAY_DURATION = 1L
         private val logger: Logger = LoggerFactory.getLogger(SlidingWindowRateLimiter::class.java)
     }
 }

@@ -2,7 +2,6 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import io.micrometer.core.instrument.MeterRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -12,27 +11,26 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.payments.metric.MetricBuilder
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import org.slf4j.Logger
-import ru.quipy.payments.metric.MetricBuilder
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
-    private val paymentProviderHostPort: String,
-    private val token: String,
-    private val metricBuilder: MetricBuilder,
+    paymentProviderHostPort: String,
+    token: String,
+    metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
-    private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
@@ -53,9 +51,11 @@ class PaymentExternalSystemAdapterImpl(
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
 
-    private val httpHandledRequestsTotalAccountCounter = metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
+    private val httpHandledRequestsTotalAccountCounter =
+        metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
     private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
 
+    @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         httpRequestsTotalAccountCounter.increment()
 
@@ -85,25 +85,11 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
+    @Suppress("LongMethod", "NestedBlockDepth")
     private suspend fun handleExternalPaymentProcessingRequest(transactionId: UUID, paymentId: UUID, amount: Int) {
         try {
             semaphore.acquire()
-            val request = Request.Builder().run {
-                val url = HttpUrl.Builder()
-                    .scheme("http")
-                    .host(host)
-                    .port(port)
-                    .addPathSegments("external/process")
-                    .apply {
-                        baseUrlComponents.forEach { (key, value) -> addQueryParameter(key, value) }
-                        addQueryParameter("transactionId", transactionId.toString())
-                        addQueryParameter("paymentId", paymentId.toString())
-                        addQueryParameter("amount", amount.toString())
-                    }
-                    .build()
-
-                url(url).post(emptyBody)
-            }.build()
+            val request = getPaymentRequest(transactionId, paymentId, amount)
 
             windowRateLimiter.tickBlocking()
             client.newCall(request).execute().use { response ->
@@ -164,6 +150,26 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
+    private fun getPaymentRequest(transactionId: UUID, paymentId: UUID, amount: Int): Request {
+        val request = Request.Builder().run {
+            val url = HttpUrl.Builder()
+                .scheme("http")
+                .host(host)
+                .port(port)
+                .addPathSegments("external/process")
+                .apply {
+                    baseUrlComponents.forEach { (key, value) -> addQueryParameter(key, value) }
+                    addQueryParameter("transactionId", transactionId.toString())
+                    addQueryParameter("paymentId", paymentId.toString())
+                    addQueryParameter("amount", amount.toString())
+                }
+                .build()
+
+            url(url).post(emptyBody)
+        }.build()
+        return request
+    }
+
     private fun parseHost(hostPort: String): String {
         val parts = hostPort.split(":")
         return if (parts.size == 2) {
@@ -178,7 +184,7 @@ class PaymentExternalSystemAdapterImpl(
         return if (parts.size == 2) {
             parts[1].toInt()
         } else {
-            80
+            PORT
         }
     }
 
@@ -192,12 +198,14 @@ class PaymentExternalSystemAdapterImpl(
         paymentScope.cancel()
     }
 
+    private fun now() = System.currentTimeMillis()
+
     companion object {
         val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
 
         val emptyBody = ByteArray(0).toRequestBody(null)
         val mapper = ObjectMapper().registerKotlinModule()
+
+        private const val PORT = 80
     }
 }
-
-fun now() = System.currentTimeMillis()

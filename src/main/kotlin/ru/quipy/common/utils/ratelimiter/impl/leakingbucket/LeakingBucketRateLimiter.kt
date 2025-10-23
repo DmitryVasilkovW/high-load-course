@@ -27,11 +27,19 @@ class LeakingBucketRateLimiter(
         rateLimiterScope.launch {
             while (true) {
                 delay(window.toMillis())
-                for (i in 0..rate) {
+                repeatLong(rate + 1) {
                     queue.poll()
                 }
             }
         }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
+    }
+
+    private inline fun repeatLong(times: Long, action: () -> Unit) {
+        var count = 0L
+        while (count < times) {
+            action()
+            count++
+        }
     }
 
     companion object {

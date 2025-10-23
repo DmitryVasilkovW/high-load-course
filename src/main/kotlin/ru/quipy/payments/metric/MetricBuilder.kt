@@ -4,7 +4,6 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Counter
 import org.springframework.stereotype.Service
 
-
 @Service
 class MetricBuilder(private val meterRegistry: MeterRegistry) {
 

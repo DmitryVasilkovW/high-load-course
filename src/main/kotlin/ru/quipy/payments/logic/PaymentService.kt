@@ -35,9 +35,13 @@ data class PaymentAccountProperties(
     val parallelRequests: Int,
     val rateLimitPerSec: Int,
     val price: Int,
-    val averageProcessingTime: Duration = Duration.ofSeconds(11),
+    val averageProcessingTime: Duration = Duration.ofSeconds(DEFAULT_AVERAGE_PROCESSING_TIME),
     val enabled: Boolean,
-)
+) {
+    companion object {
+        private const val DEFAULT_AVERAGE_PROCESSING_TIME = 11L
+    }
+}
 
 /**
  * Describes response from external service.
