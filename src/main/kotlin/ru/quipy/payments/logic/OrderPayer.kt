@@ -13,7 +13,12 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
+import org.springframework.web.client.HttpClientErrorException
+import ru.quipy.common.utils.ratelimiter.impl.composite.CompositeRateLimiter
 import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
+import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 
 @Service
 class OrderPayer {
@@ -21,10 +26,18 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
-    private var rateLimiter: LeakingBucketRateLimiter = LeakingBucketRateLimiter(
-        11,
-        window = Duration.ofSeconds(1),
-        bucketSize = 270,
+    private val compositeRateLimiter = CompositeRateLimiter(
+        TokenBucketRateLimiter(
+            rate = 11,
+            bucketMaxCapacity = 44,
+            window = 1,
+            timeUnit = TimeUnit.SECONDS
+        ),
+        LeakingBucketRateLimiter(
+            rate = 11L,
+            window = Duration.ofSeconds(1),
+            bucketSize = 16
+        )
     )
 
     @Autowired
@@ -41,10 +54,15 @@ class OrderPayer {
     )
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
-        if (!rateLimiter.tick()) {
-            return null
+        if (!compositeRateLimiter.tick()) {
+            throw HttpClientErrorException.create(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Payment executor queue is full",
+                HttpHeaders.EMPTY,
+                ByteArray(0),
+                null
+            )
         }
-
         val createdAt = System.currentTimeMillis()
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
