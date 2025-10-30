@@ -11,6 +11,8 @@ import ru.quipy.payments.logic.OrderPayer
 import java.util.*
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import java.util.concurrent.RejectedExecutionException
+import org.springframework.web.client.HttpClientErrorException
+import ru.quipy.payments.logic.TooManyRequestsError
 
 @RestController
 class APIController {
@@ -57,21 +59,23 @@ class APIController {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
-        val paymentId = UUID.randomUUID()
-        val order = orderRepository.findById(orderId)?.let {
-            orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
-            it
-        } ?: throw IllegalArgumentException("No such order $orderId")
+        fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<PaymentSubmissionDto> {
+            val paymentId = UUID.randomUUID()
+            val timestamp = System.currentTimeMillis() + 950
 
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline) ?: return ResponseEntity
-            .status(HttpStatus.TOO_MANY_REQUESTS)
-            .header("Retry-After", "30")
-            .build()
+            val order = orderRepository.findById(orderId)?.let {
+                orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
+                it
+            } ?: throw IllegalArgumentException("No such order $orderId")
 
-        return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
-    }
-
+            try {
+                val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+                return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
+            } catch (e: HttpClientErrorException.TooManyRequests) {
+                // maybe 30 seconds?
+                return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", timestamp.toString()).build()
+            }
+        }
     class PaymentSubmissionDto(
         val timestamp: Long,
         val transactionId: UUID,

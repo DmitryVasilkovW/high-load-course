@@ -195,6 +195,7 @@ class PaymentExternalSystemAdapterImpl(
     override fun price() = properties.price
 
     override fun isEnabled() = properties.enabled
+    override fun getProperties(): PaymentAccountProperties = properties
 
     override fun name() = properties.accountName
 

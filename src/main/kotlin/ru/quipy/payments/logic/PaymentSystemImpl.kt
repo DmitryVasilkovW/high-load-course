@@ -17,4 +17,6 @@ class PaymentSystemImpl(
             it.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
         }
     }
+
+    override fun getAllAccountProperties(): List<PaymentAccountProperties> = paymentAccounts.map { it.getProperties() }
 }

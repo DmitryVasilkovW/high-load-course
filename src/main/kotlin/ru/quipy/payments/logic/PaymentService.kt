@@ -8,6 +8,8 @@ interface PaymentService {
      * Submit payment request to some external service.
      */
     fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
+
+    fun getAllAccountProperties() : List<PaymentAccountProperties>
 }
 
 /**
@@ -24,6 +26,8 @@ interface PaymentExternalSystemAdapter {
     fun price(): Int
 
     fun isEnabled(): Boolean
+
+    fun getProperties(): PaymentAccountProperties
 }
 
 /**
@@ -35,13 +39,9 @@ data class PaymentAccountProperties(
     val parallelRequests: Int,
     val rateLimitPerSec: Int,
     val price: Int,
-    val averageProcessingTime: Duration = Duration.ofSeconds(DEFAULT_AVERAGE_PROCESSING_TIME),
+    val averageProcessingTime: Duration = Duration.ofSeconds(11),
     val enabled: Boolean,
-) {
-    companion object {
-        private const val DEFAULT_AVERAGE_PROCESSING_TIME = 11L
-    }
-}
+)
 
 /**
  * Describes response from external service.

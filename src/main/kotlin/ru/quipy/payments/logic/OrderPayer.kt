@@ -1,14 +1,14 @@
 package ru.quipy.payments.logic
 
-import java.time.Duration
+import jakarta.annotation.PostConstruct
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
-import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import java.time.Duration
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -16,29 +16,20 @@ import java.util.concurrent.TimeUnit
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.web.client.HttpClientErrorException
-import ru.quipy.common.utils.ratelimiter.impl.composite.CompositeRateLimiter
+import ru.quipy.common.utils.NamedThreadFactory
+import ru.quipy.common.utils.ratelimiter.RateLimiter
 import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
 import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 
 @Service
 class OrderPayer {
 
+    companion object {
+        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
+    }
+
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
-
-    private val compositeRateLimiter = CompositeRateLimiter(
-        TokenBucketRateLimiter(
-            rate = 11,
-            bucketMaxCapacity = 44,
-            window = 1,
-            timeUnit = TimeUnit.SECONDS
-        ),
-        LeakingBucketRateLimiter(
-            rate = 11L,
-            window = Duration.ofSeconds(1),
-            bucketSize = 16
-        )
-    )
 
     @Autowired
     private lateinit var paymentService: PaymentService
@@ -48,13 +39,19 @@ class OrderPayer {
         16,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(1500),
+        LinkedBlockingQueue(16000),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler()
     )
+    private var averageProcessingTime: Long = 0
+    private var rateLimitPerSec: Int = 0
+    private var parallelRequests: Int = 0
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
-        if (!compositeRateLimiter.tick()) {
+
+    val rateLimiter = TokenBucketRateLimiter(11, 11, 1, TimeUnit.SECONDS)
+
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+        if (!rateLimiter.tick()) {
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Payment executor queue is full",
@@ -63,23 +60,22 @@ class OrderPayer {
                 null
             )
         }
+
         val createdAt = System.currentTimeMillis()
+
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
                     paymentId,
                     orderId,
-                    amount,
+                    amount
                 )
             }
-            logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
-
+            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
         return createdAt
     }
-
-    companion object {
-        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-    }
 }
+
+class TooManyRequestsError(val millisToRetry: Long) : RuntimeException()
