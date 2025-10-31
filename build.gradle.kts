@@ -49,6 +49,8 @@ dependencies {
     implementation("io.micrometer:micrometer-registry-prometheus")
     implementation("ru.quipy:tiny-event-sourcing-spring-boot-starter:2.7.5")
     implementation("ru.quipy:tiny-postgres-event-store-spring-boot-starter:2.7.5")
+    implementation("org.springframework.retry:spring-retry:2.0.2")
+    implementation("org.springframework:spring-context:6.1.0")
     implementation("io.github.resilience4j:resilience4j-ratelimiter:2.2.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.9.0")
@@ -56,6 +58,7 @@ dependencies {
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.jetbrains.kotlin:kotlin-test:2.2.0")
+    implementation(kotlin("stdlib"))
 
 }
 
