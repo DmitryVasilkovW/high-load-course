@@ -94,6 +94,7 @@ class PaymentExternalSystemAdapterImpl(
         amount: Int,
     ) = doRetry(
         delay = delay,
+        retryOn = listOf(SocketTimeoutException::class, Exception::class),
         recover = { logError(paymentId, transactionId) },
     ) {
         process(transactionId, paymentId, amount)
