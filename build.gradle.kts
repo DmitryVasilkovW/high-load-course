@@ -1,11 +1,9 @@
-import org.gradle.internal.impldep.org.jsoup.nodes.Document
-
-//import io.gitlab.arturbosch.detekt.Detekt
+import io.gitlab.arturbosch.detekt.Detekt
 
 plugins {
     id("org.springframework.boot") version "3.5.0"
     id("io.spring.dependency-management") version "1.1.3"
-//    id("io.gitlab.arturbosch.detekt") version "1.23.8"
+    id("io.gitlab.arturbosch.detekt") version "1.23.8"
     kotlin("jvm") version "2.0.21"
     kotlin("plugin.spring") version "2.0.21"
     kotlin("plugin.jpa") version "2.0.21"
@@ -15,20 +13,20 @@ group = "ru.quipy"
 version = "0.0.1-SNAPSHOT"
 java.sourceCompatibility = JavaVersion.VERSION_17
 
-//detekt {
-//    buildUponDefaultConfig = true // preconfigure defaults
-//    allRules = false // activate all available (even unstable) rules.
-//    config.setFrom("$projectDir/detekt/detekt.yml") // point to your custom config defining rules to run, overwriting default behavior
-//    autoCorrect = true
-//}
-//
-//tasks.withType<Detekt>().configureEach {
-//    reports {
-//        Document.OutputSettings.Syntax.html.required.set(true) // observe findings in your browser with structure and code snippets
-//        sarif.required.set(true) // standardized SARIF format (https://sarifweb.azurewebsites.net/) to support integrations with GitHub Code Scanning
-//        md.required.set(true) // simple Markdown format
-//    }
-//}
+detekt {
+    buildUponDefaultConfig = true // preconfigure defaults
+    allRules = false // activate all available (even unstable) rules.
+    config.setFrom("$projectDir/detekt/detekt.yml") // point to your custom config defining rules to run, overwriting default behavior
+    autoCorrect = true
+}
+
+tasks.withType<Detekt>().configureEach {
+    reports {
+        //Document.OutputSettings.Syntax.html.required.set(true) // observe findings in your browser with structure and code snippets
+        sarif.required.set(true) // standardized SARIF format (https://sarifweb.azurewebsites.net/) to support integrations with GitHub Code Scanning
+        md.required.set(true) // simple Markdown format
+    }
+}
 
 repositories {
     gradlePluginPortal()
@@ -36,7 +34,7 @@ repositories {
 }
 
 dependencies {
-    //detektPlugins("io.gitlab.arturbosch.detekt:detekt-formatting:1.23.6")
+    detektPlugins("io.gitlab.arturbosch.detekt:detekt-formatting:1.23.6")
 
     implementation("org.springframework.boot:spring-boot-starter-web")
     implementation("org.springframework.boot:spring-boot-starter-jetty")

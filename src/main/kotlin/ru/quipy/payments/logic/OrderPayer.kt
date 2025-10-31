@@ -1,6 +1,5 @@
 package ru.quipy.payments.logic
 
-import jakarta.annotation.PostConstruct
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -8,7 +7,6 @@ import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import java.time.Duration
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
@@ -17,8 +15,6 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.web.client.HttpClientErrorException
 import ru.quipy.common.utils.NamedThreadFactory
-import ru.quipy.common.utils.ratelimiter.RateLimiter
-import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
 import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 
 @Service
@@ -41,12 +37,11 @@ class OrderPayer {
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(16000),
         NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
+        CallerBlockingRejectedExecutionHandler(),
     )
     private var averageProcessingTime: Long = 0
     private var rateLimitPerSec: Int = 0
     private var parallelRequests: Int = 0
-
 
     val rateLimiter = TokenBucketRateLimiter(11, 11, 1, TimeUnit.SECONDS)
 
@@ -57,7 +52,7 @@ class OrderPayer {
                 "Payment executor queue is full",
                 HttpHeaders.EMPTY,
                 ByteArray(0),
-                null
+                null,
             )
         }
 
@@ -68,7 +63,7 @@ class OrderPayer {
                 it.create(
                     paymentId,
                     orderId,
-                    amount
+                    amount,
                 )
             }
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")

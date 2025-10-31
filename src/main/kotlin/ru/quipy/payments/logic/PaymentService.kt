@@ -9,7 +9,7 @@ interface PaymentService {
      */
     fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
 
-    fun getAllAccountProperties() : List<PaymentAccountProperties>
+    fun getAllAccountProperties(): List<PaymentAccountProperties>
 }
 
 /**
