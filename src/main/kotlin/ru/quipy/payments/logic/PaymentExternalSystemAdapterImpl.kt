@@ -155,9 +155,7 @@ class PaymentExternalSystemAdapterImpl(
                 paymentId,
                 e,
             )
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
-            }
+            throw e
         } catch (e: Exception) {
             logger.error(
                 "[{}] Payment failed for txId: {}, payment: {}",
@@ -166,9 +164,7 @@ class PaymentExternalSystemAdapterImpl(
                 paymentId,
                 e,
             )
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = e.message)
-            }
+            throw e
         } finally {
             semaphore.release()
         }
