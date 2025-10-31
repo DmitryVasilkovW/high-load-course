@@ -13,7 +13,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
+import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
@@ -21,7 +21,6 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.TimeUnit
-import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -38,8 +37,8 @@ class PaymentExternalSystemAdapterImpl(
 
     private val client = OkHttpClient.Builder().build()
     private val rateLimiter = TokenBucketRateLimiter(
-        rate = 16,
-        bucketMaxCapacity = 16,
+        rate = 11,
+        bucketMaxCapacity = 11,
         window = 1,
         timeUnit = TimeUnit.SECONDS
     )
@@ -195,9 +194,10 @@ class PaymentExternalSystemAdapterImpl(
     override fun price() = properties.price
 
     override fun isEnabled() = properties.enabled
-    override fun getProperties(): PaymentAccountProperties = properties
 
     override fun name() = properties.accountName
+
+    override fun getProperties() = properties
 
     override fun close() {
         paymentScope.cancel()
