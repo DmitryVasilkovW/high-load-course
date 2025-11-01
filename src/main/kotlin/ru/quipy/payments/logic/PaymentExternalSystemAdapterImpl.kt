@@ -20,6 +20,7 @@ import ru.quipy.payments.metric.MetricBuilder
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import org.testcontainers.shaded.com.google.common.util.concurrent.Striped.semaphore
 import ru.quipy.common.utils.retry.doRetry
 
 // Advice: always treat time as a Duration
@@ -47,8 +48,7 @@ class PaymentExternalSystemAdapterImpl(
     )
 
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val delay =
-        (((requestAverageProcessingTime.toMillis().toDouble()) / 2.0) * (rateLimitPerSec / 7.0)).toLong()
+    private val delay = requestAverageProcessingTime.toMillis().toDouble().toLong()
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
