@@ -15,10 +15,6 @@ class PaymentSystemImpl(
         }
     }
 
-    override fun getAllAccountProperties() = paymentAccounts.map {
-        it.getProperties()
-    }
-
     companion object {
         val logger: Logger = LoggerFactory.getLogger(PaymentSystemImpl::class.java)
     }
