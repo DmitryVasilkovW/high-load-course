@@ -13,14 +13,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
+import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.TimeUnit
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -36,11 +35,9 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder().build()
-    private val rateLimiter = TokenBucketRateLimiter(
-        rate = 11,
-        bucketMaxCapacity = 11,
-        window = 1,
-        timeUnit = TimeUnit.SECONDS
+    private val windowRateLimiter = SlidingWindowRateLimiter(
+        rate = rateLimitPerSec.toLong(),
+        window = Duration.ofSeconds(1),
     )
 
     private val host = parseHost(paymentProviderHostPort)
@@ -94,7 +91,7 @@ class PaymentExternalSystemAdapterImpl(
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
 
-            rateLimiter.tick()
+            windowRateLimiter.tick()
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
