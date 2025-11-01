@@ -197,8 +197,6 @@ class PaymentExternalSystemAdapterImpl(
 
     override fun name() = properties.accountName
 
-    override fun getProperties() = properties
-
     override fun close() {
         paymentScope.cancel()
     }
