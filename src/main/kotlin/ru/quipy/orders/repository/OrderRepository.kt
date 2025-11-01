@@ -23,7 +23,6 @@ class OrderRepository {
         .expireAfterWrite(Duration.ofHours(5))
         .build<UUID, Order?>()
 
-
     fun save(order: Order): Order {
         orderCache.put(order.id, order)
         return order
