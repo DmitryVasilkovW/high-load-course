@@ -33,7 +33,7 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    val rateLimiter = TokenBucketRateLimiter(4, 11, 1, TimeUnit.MILLISECONDS)
+    val rateLimiter = TokenBucketRateLimiter(6, 11, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
         if (!rateLimiter.tick()
