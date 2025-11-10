@@ -28,15 +28,17 @@ class OrderPayer {
         16,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(16000),
+        LinkedBlockingQueue(11),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler()
     )
 
-    val rateLimiter = TokenBucketRateLimiter(11, 11, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(6, 11, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
-        if (!rateLimiter.tick()) {
+        if (!rateLimiter.tick()
+            || paymentExecutor.queue.remainingCapacity() == 0
+        ) {
             return null
         }
 
