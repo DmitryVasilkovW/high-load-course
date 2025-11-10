@@ -13,9 +13,6 @@ import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import org.springframework.http.HttpHeaders
-import org.springframework.http.HttpStatus
-import org.springframework.web.client.HttpClientErrorException
 
 @Service
 class OrderPayer {
@@ -27,8 +24,8 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
+        11,
+        11,
         0L,
         TimeUnit.MILLISECONDS,
         LinkedBlockingQueue(11),
@@ -36,7 +33,7 @@ class OrderPayer {
         CallerBlockingRejectedExecutionHandler()
     )
 
-    val rateLimiter = TokenBucketRateLimiter(6, 11, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(4, 11, 1, TimeUnit.MILLISECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
         if (!rateLimiter.tick()
