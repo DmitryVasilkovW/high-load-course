@@ -31,11 +31,11 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
+        50,
+        50,
         0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(16000),
+        LinkedBlockingQueue(5000),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler(),
     )
@@ -43,19 +43,34 @@ class OrderPayer {
     private var rateLimitPerSec: Int = 0
     private var parallelRequests: Int = 0
 
-    val rateLimiter = TokenBucketRateLimiter(11, 11, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(5, 5, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (!rateLimiter.tick()) {
+            val retryAfter = System.currentTimeMillis() + 30000 // 30 секунд
+            throw HttpClientErrorException.create(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Rate limit exceeded",
+                HttpHeaders.EMPTY,
+                ByteArray(0),
+                null,
+            ).also {
+                it.responseHeaders?.set("Retry-After", retryAfter.toString())
+            }
+        }
+
+        if (paymentExecutor.queue.size >= paymentExecutor.queue.remainingCapacity()) {
+            val retryAfter = System.currentTimeMillis() + 10000 // 10 секунд
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Payment executor queue is full",
                 HttpHeaders.EMPTY,
                 ByteArray(0),
                 null,
-            )
+            ).also {
+                it.responseHeaders?.set("Retry-After", retryAfter.toString())
+            }
         }
-
         val createdAt = System.currentTimeMillis()
 
         paymentExecutor.submit {

@@ -23,6 +23,7 @@ import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
+import kotlin.math.max
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -37,7 +38,11 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(Duration.ofSeconds(10))
+        .readTimeout(Duration.ofSeconds(30))
+        .writeTimeout(Duration.ofSeconds(10))
+        .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
 
     private val host = parseHost(paymentProviderHostPort)
@@ -49,7 +54,7 @@ class PaymentExternalSystemAdapterImpl(
     )
 
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val delay = requestAverageProcessingTime.toMillis().toDouble().toLong()
+    private val delay = max(requestAverageProcessingTime.toMillis(), 6000).toLong()
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
@@ -108,9 +113,9 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         amount: Int,
     ) = doRetry(
-        maxAttempts = 1,
+        maxAttempts = 3,
         delay = delay,
-        retryOn = listOf(SocketTimeoutException::class, Exception::class, InterruptedIOException::class),
+        retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class),
         recover = { logError(paymentId, transactionId) },
     ) {
         process(transactionId, paymentId, amount)
