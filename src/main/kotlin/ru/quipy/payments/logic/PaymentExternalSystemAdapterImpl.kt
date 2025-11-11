@@ -2,6 +2,11 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.time.Duration
+import java.util.*
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -14,14 +19,10 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
+import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
-import java.net.SocketTimeoutException
-import java.time.Duration
-import java.util.*
-import org.testcontainers.shaded.com.google.common.util.concurrent.Striped.semaphore
-import ru.quipy.common.utils.retry.doRetry
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -55,7 +56,21 @@ class PaymentExternalSystemAdapterImpl(
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
-    private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+    private val httpRequestsTotalAccountCounter =
+        metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+    private val incomingRegCounter =
+        metricBuilder.buildIncomingRegCounter(properties.accountName)
+    private val incomingFinishedReqCounter =
+        metricBuilder.buildIncomingFinishedReqCounter(properties.accountName)
+    private val outgoingReqCounter =
+        metricBuilder.buildOutgoingReqCounter(properties.accountName)
+    private val outgoingFinishedReqCounter =
+        metricBuilder.buildOutgoingFinishedReqCounter(properties.accountName)
+    private val retryCounter =
+        metricBuilder.buildRetryCounter(properties.accountName)
+    private val outgoingRequestProcessingTimeDistributionSummary =
+        metricBuilder.buildOutgoingRequestProcessingTimeDistributionSummary(properties.accountName)
+
 
     @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -93,8 +108,9 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         amount: Int,
     ) = doRetry(
+        maxAttempts = 1,
         delay = delay,
-        retryOn = listOf(SocketTimeoutException::class, Exception::class),
+        retryOn = listOf(SocketTimeoutException::class, Exception::class, InterruptedIOException::class),
         recover = { logError(paymentId, transactionId) },
     ) {
         process(transactionId, paymentId, amount)
@@ -104,6 +120,7 @@ class PaymentExternalSystemAdapterImpl(
         paymentESService.update(paymentId) {
             it.logProcessing(false, now(), transactionId, reason = "All retry attempts failed")
         }
+        retryCounter.increment()
     }
 
     private suspend fun process(
@@ -111,9 +128,13 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         amount: Int,
     ) {
+        incomingRegCounter.increment()
+        val startTime = now()
+        logger.info("228aboba")
         try {
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
+            outgoingReqCounter.increment()
 
             rateLimiter.tick()
             client.newCall(request).execute().use { response ->
@@ -147,6 +168,8 @@ class PaymentExternalSystemAdapterImpl(
                 }
             }
             httpHandledRequestsTotalAccountCounter.increment()
+            val duration = System.currentTimeMillis() - startTime
+            outgoingRequestProcessingTimeDistributionSummary.record(duration, TimeUnit.MILLISECONDS)
         } catch (e: SocketTimeoutException) {
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
@@ -156,6 +179,11 @@ class PaymentExternalSystemAdapterImpl(
                 e,
             )
             throw e
+        } catch (e: InterruptedIOException) {
+            logger.error("[$accountName] Payment interrupted (timeout/cancel) for txId: $transactionId, payment: $paymentId", e)
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Interrupted I/O (timeout or cancel).")
+            }
         } catch (e: Exception) {
             logger.error(
                 "[{}] Payment failed for txId: {}, payment: {}",
@@ -167,6 +195,8 @@ class PaymentExternalSystemAdapterImpl(
             throw e
         } finally {
             semaphore.release()
+            outgoingFinishedReqCounter.increment()
+            incomingFinishedReqCounter.increment()
         }
     }
 
