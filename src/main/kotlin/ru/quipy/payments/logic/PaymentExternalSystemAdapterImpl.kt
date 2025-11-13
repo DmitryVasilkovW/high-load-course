@@ -6,7 +6,6 @@ import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -123,9 +122,13 @@ class PaymentExternalSystemAdapterImpl(
 
     private fun logError(paymentId: UUID, transactionId: UUID) {
         paymentESService.update(paymentId) {
-            it.logProcessing(false, now(), transactionId, reason = "All retry attempts failed")
+            it.logProcessing(
+                false,
+                now(),
+                transactionId,
+                reason = "All retry attempts failed",
+            )
         }
-        retryCounter.increment()
     }
 
     private suspend fun process(
@@ -135,7 +138,6 @@ class PaymentExternalSystemAdapterImpl(
     ) {
         incomingRegCounter.increment()
         val startTime = now()
-        logger.info("228aboba")
         try {
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
@@ -176,6 +178,7 @@ class PaymentExternalSystemAdapterImpl(
             val processingTime = now() - startTime
             outgoingRequestProcessingTimeDistributionSummary.record(processingTime.toDouble())
         } catch (e: SocketTimeoutException) {
+            retryCounter.increment()
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
                 accountName,
@@ -185,11 +188,17 @@ class PaymentExternalSystemAdapterImpl(
             )
             throw e
         } catch (e: InterruptedIOException) {
-            logger.error("[$accountName] Payment interrupted (timeout/cancel) for txId: $transactionId, payment: $paymentId", e)
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "Interrupted I/O (timeout or cancel).")
-            }
+            retryCounter.increment()
+            logger.error(
+                "[{}] Payment interrupted for txId: {}, payment: {}",
+                accountName,
+                transactionId,
+                paymentId,
+                e,
+            )
+            throw e
         } catch (e: Exception) {
+            retryCounter.increment()
             logger.error(
                 "[{}] Payment failed for txId: {}, payment: {}",
                 accountName,
