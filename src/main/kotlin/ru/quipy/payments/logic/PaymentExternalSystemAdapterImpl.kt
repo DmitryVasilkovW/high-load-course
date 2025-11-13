@@ -74,7 +74,7 @@ class PaymentExternalSystemAdapterImpl(
     private val retryCounter =
         metricBuilder.buildRetryCounter(properties.accountName)
     private val outgoingRequestProcessingTimeDistributionSummary =
-        metricBuilder.buildOutgoingRequestProcessingTimeDistributionSummary(properties.accountName)
+        metricBuilder.buildOutgoingRequestProcessingTimeDistributionSummary()
 
 
     @Suppress("SwallowedException")
@@ -173,8 +173,8 @@ class PaymentExternalSystemAdapterImpl(
                 }
             }
             httpHandledRequestsTotalAccountCounter.increment()
-            val duration = System.currentTimeMillis() - startTime
-            outgoingRequestProcessingTimeDistributionSummary.record(duration, TimeUnit.MILLISECONDS)
+            val processingTime = now() - startTime
+            outgoingRequestProcessingTimeDistributionSummary.record(processingTime.toDouble())
         } catch (e: SocketTimeoutException) {
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
