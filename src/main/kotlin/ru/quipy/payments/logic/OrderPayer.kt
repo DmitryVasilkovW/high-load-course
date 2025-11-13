@@ -31,11 +31,11 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        50,
-        50,
-        0L,
+        16,
+        32,
+        60L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(5000),
+        LinkedBlockingQueue(100),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler(),
     )
@@ -43,11 +43,11 @@ class OrderPayer {
     private var rateLimitPerSec: Int = 0
     private var parallelRequests: Int = 0
 
-    val rateLimiter = TokenBucketRateLimiter(5, 5, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(8, 8, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (!rateLimiter.tick()) {
-            val retryAfter = System.currentTimeMillis() + 30000 // 30 секунд
+            val retryAfter = System.currentTimeMillis() + 30000
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Rate limit exceeded",
@@ -60,7 +60,7 @@ class OrderPayer {
         }
 
         if (paymentExecutor.queue.size >= paymentExecutor.queue.remainingCapacity()) {
-            val retryAfter = System.currentTimeMillis() + 10000 // 10 секунд
+            val retryAfter = System.currentTimeMillis() + 10000
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Payment executor queue is full",
