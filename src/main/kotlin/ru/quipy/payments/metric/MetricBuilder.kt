@@ -3,7 +3,6 @@ package ru.quipy.payments.metric
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
-import io.micrometer.core.instrument.Timer
 import org.springframework.stereotype.Service
 
 @Service
@@ -76,7 +75,7 @@ class MetricBuilder(private val meterRegistry: MeterRegistry) {
         private const val OUTGOING_FINISHED_REQUEST = "outgoing finished request"
         private const val OUTGOING_REQUEST_RETRIES = "outgoing_request_retries_total"
         private const val NUMBER_OF_RETRIES_FOR_OUTGOING_REQUESTS = "Number of retries for outgoing requests"
-        private const val OUTGOING_REQUEST_PROCESSING_TIME = "outgoing_request_processing_time"
+        private const val OUTGOING_REQUEST_PROCESSING_TIME = "outgoing_request_processing"
         private const val OUTGOING_REQUEST_LATENCY = "Outgoing request latency"
     }
 }
