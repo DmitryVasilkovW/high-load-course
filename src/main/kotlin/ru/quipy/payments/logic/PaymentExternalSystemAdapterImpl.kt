@@ -5,8 +5,6 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,6 +18,7 @@ import ru.quipy.payments.metric.MetricBuilder
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.Semaphore
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -49,7 +48,7 @@ class PaymentExternalSystemAdapterImpl(
     )
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
-    private val semaphore = Semaphore(permits = parallelRequests)
+    private val semaphore = Semaphore(parallelRequests)
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
@@ -80,13 +79,11 @@ class PaymentExternalSystemAdapterImpl(
             transactionId,
         )
 
-        paymentScope.launch {
-            handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
-        }
+        handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
     }
 
     @Suppress("LongMethod", "NestedBlockDepth")
-    private suspend fun handleExternalPaymentProcessingRequest(transactionId: UUID, paymentId: UUID, amount: Int) {
+    private fun handleExternalPaymentProcessingRequest(transactionId: UUID, paymentId: UUID, amount: Int) {
         try {
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)

@@ -60,7 +60,6 @@ class APIController {
         @RequestParam deadline: Long
     ): ResponseEntity<PaymentSubmissionDto> {
         val paymentId = UUID.randomUUID()
-        val timestamp = System.currentTimeMillis() + 950
 
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
@@ -74,7 +73,7 @@ class APIController {
         } else {
             ResponseEntity
                 .status(HttpStatus.TOO_MANY_REQUESTS)
-                .header("Retry-After", timestamp.toString())
+                .header("Retry-After", "30")
                 .build()
         }
     }
