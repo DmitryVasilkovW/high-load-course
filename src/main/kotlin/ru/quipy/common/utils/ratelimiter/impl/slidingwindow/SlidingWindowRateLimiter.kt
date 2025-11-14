@@ -21,25 +21,6 @@ class SlidingWindowRateLimiter(
     private val sum = AtomicLong(0)
     private val queue = PriorityBlockingQueue<Measure>(10_000)
 
-    init {
-        rateLimiterScope.launch {
-            while (true) {
-                val head = queue.peek()
-                val winStart = System.currentTimeMillis() - window.toMillis()
-                if (head == null) {
-                    delay(1L)
-                    continue
-                }
-                if (head.timestamp > winStart) {
-                    delay(head.timestamp - winStart)
-                    continue
-                }
-                sum.addAndGet(-1)
-                queue.take()
-            }
-        }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
-    }
-
     override fun tick(): Boolean {
         while (true) {
             val curSum = sum.get()
@@ -66,6 +47,22 @@ class SlidingWindowRateLimiter(
         }
     }
 
+    private val releaseJob = rateLimiterScope.launch {
+        while (true) {
+            val head = queue.peek()
+            val winStart = System.currentTimeMillis() - window.toMillis()
+            if (head == null) {
+                delay(1L)
+                continue
+            }
+            if (head.timestamp > winStart) {
+                delay(head.timestamp - winStart)
+                continue
+            }
+            sum.addAndGet(-1)
+            queue.take()
+        }
+    }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(SlidingWindowRateLimiter::class.java)
     }
