@@ -19,26 +19,7 @@ class SlidingWindowRateLimiter(
     private val rateLimiterScope = CoroutineScope(Executors.newSingleThreadExecutor().asCoroutineDispatcher())
 
     private val sum = AtomicLong(0)
-    private val queue = PriorityBlockingQueue<Measure>(QUEUE_CAPACITY)
-    private val windowMillis = window.toMillis()
-
-    init {
-        rateLimiterScope.launch {
-            while (true) {
-                val head = queue.peek()
-                val winStart = System.currentTimeMillis() - windowMillis
-                when {
-                    head == null -> delay(1L)
-                    head.timestamp > winStart -> delay(head.timestamp - winStart)
-
-                    else -> {
-                        sum.addAndGet(-1)
-                        queue.take()
-                    }
-                }
-            }
-        }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
-    }
+    private val queue = PriorityBlockingQueue<Measure>(10_000)
 
     override fun tick(): Boolean {
         while (true) {
@@ -53,22 +34,36 @@ class SlidingWindowRateLimiter(
 
     fun tickBlocking() {
         while (!tick()) {
-            Thread.sleep(DELAY_DURATION)
+            Thread.sleep(10)
         }
     }
 
     data class Measure(
         val value: Long,
-        val timestamp: Long,
+        val timestamp: Long
     ) : Comparable<Measure> {
         override fun compareTo(other: Measure): Int {
             return timestamp.compareTo(other.timestamp)
         }
     }
 
+    private val releaseJob = rateLimiterScope.launch {
+        while (true) {
+            val head = queue.peek()
+            val winStart = System.currentTimeMillis() - window.toMillis()
+            if (head == null) {
+                delay(1L)
+                continue
+            }
+            if (head.timestamp > winStart) {
+                delay(head.timestamp - winStart)
+                continue
+            }
+            sum.addAndGet(-1)
+            queue.take()
+        }
+    }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
     companion object {
-        private const val QUEUE_CAPACITY = 10_000
-        private const val DELAY_DURATION = 1L
         private val logger: Logger = LoggerFactory.getLogger(SlidingWindowRateLimiter::class.java)
     }
 }

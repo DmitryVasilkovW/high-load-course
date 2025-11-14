@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
+import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
@@ -23,16 +24,26 @@ class OrderPayer {
     private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        4,
-        4,
+        16,
+        16,
         0L,
-        TimeUnit.MICROSECONDS,
-        LinkedBlockingQueue(128),
+        TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue(11),
         NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler(),
+        CallerBlockingRejectedExecutionHandler()
     )
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    val rateLimiter = TokenBucketRateLimiter(6, 11, 1, TimeUnit.SECONDS)
+
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
+        if (paymentExecutor.queue.remainingCapacity() == 0) {
+            return null
+        }
+
+        if (!rateLimiter.tick()) {
+            return null
+        }
+
         val createdAt = System.currentTimeMillis()
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
@@ -43,7 +54,6 @@ class OrderPayer {
                 )
             }
             logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
-
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
         return createdAt
