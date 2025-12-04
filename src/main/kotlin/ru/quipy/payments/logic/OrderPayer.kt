@@ -9,8 +9,7 @@ import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 @Service
@@ -26,15 +25,18 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
-        0L,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8_000),
-        NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
-    )
+    private val paymentExecutor = object : ScheduledThreadPoolExecutor(
+        5000,
+        NamedThreadFactory("payment-submission-executor")
+    ) {
+        init {
+            setMaximumPoolSize(5000)
+            setKeepAliveTime(0L, TimeUnit.MILLISECONDS)
+            setRejectedExecutionHandler(CallerBlockingRejectedExecutionHandler())
+            removeOnCancelPolicy = true
+        }
+    }
+
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
