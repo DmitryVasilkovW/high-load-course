@@ -1,5 +1,6 @@
 package ru.quipy.payments.logic
 
+import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
 import java.time.Duration
 import java.util.*
 
@@ -10,6 +11,8 @@ interface PaymentService {
     fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long)
 
     fun getAllAccountProperties(): List<PaymentAccountProperties>
+
+    fun getLeakingBucket(waitingTime: Duration): LeakingBucketRateLimiter
 }
 
 /**
@@ -28,6 +31,10 @@ interface PaymentExternalSystemAdapter {
     fun isEnabled(): Boolean
 
     fun getProperties(): PaymentAccountProperties
+
+    fun getRateLimit(): Long
+
+    fun getProcessingTime(): Duration
 }
 
 /**

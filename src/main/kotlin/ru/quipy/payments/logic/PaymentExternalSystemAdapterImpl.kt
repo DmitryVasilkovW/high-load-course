@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,6 +24,7 @@ import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
+import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
 // Advice: always treat time as a Duration
@@ -36,11 +39,24 @@ class PaymentExternalSystemAdapterImpl(
     private val accountName = properties.accountName
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
+    private val processingTime = properties.averageProcessingTime
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(Duration.ofSeconds(10))
-        .readTimeout(Duration.ofSeconds(30))
-        .writeTimeout(Duration.ofSeconds(10))
+        .callTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(5, TimeUnit.SECONDS)
+        .dispatcher(Dispatcher().apply {
+            maxRequests = 1500
+            maxRequestsPerHost = 1500
+        })
+        .connectionPool(
+            ConnectionPool(
+                maxIdleConnections = 200,
+                keepAliveDuration = 5,
+                timeUnit = TimeUnit.MINUTES
+            )
+        )
         .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
 
@@ -75,10 +91,22 @@ class PaymentExternalSystemAdapterImpl(
     private val outgoingRequestProcessingTimeDistributionSummary =
         metricBuilder.buildOutgoingRequestProcessingTimeDistributionSummary()
 
+    override fun getRateLimit(): Long = rateLimitPerSec.toLong()
+
+    override fun getProcessingTime(): Duration = processingTime
 
     @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         httpRequestsTotalAccountCounter.increment()
+        val transactionId = UUID.randomUUID()
+
+        if (now() + processingTime.toMillis() > deadline) {
+            logger.error("[$accountName] too late for this payment $paymentId")
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "deadline exceeded")
+            }
+            return
+        }
 
         logger.warn(
             "[{}] Submitting payment request for payment {}",
@@ -86,7 +114,6 @@ class PaymentExternalSystemAdapterImpl(
             paymentId,
         )
 
-        val transactionId = UUID.randomUUID()
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
