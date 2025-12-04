@@ -2,15 +2,6 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
-import java.time.Duration
-import java.util.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
 import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.HttpUrl
@@ -24,6 +15,14 @@ import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.time.Duration
+import java.util.*
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
@@ -58,6 +57,7 @@ class PaymentExternalSystemAdapterImpl(
             )
         )
         .build()
+
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
 
     private val host = parseHost(paymentProviderHostPort)
@@ -71,8 +71,8 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val delay = max(requestAverageProcessingTime.toMillis(), 6000).toLong()
 
-    private val paymentScope = CoroutineScope(Dispatchers.IO)
-    private val semaphore = Semaphore(permits = parallelRequests)
+    private val executorService: ExecutorService = Executors.newFixedThreadPool(parallelRequests)
+    private val semaphore = Semaphore(parallelRequests)
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
@@ -96,24 +96,22 @@ class PaymentExternalSystemAdapterImpl(
     override fun getProcessingTime(): Duration = processingTime
 
     @Suppress("SwallowedException")
-    override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
+    override fun performPaymentAsync(
+        paymentId: UUID,
+        amount: Int,
+        paymentStartedAt: Long,
+        deadline: Long
+    ): CompletableFuture<Boolean> {
         httpRequestsTotalAccountCounter.increment()
         val transactionId = UUID.randomUUID()
 
-        if (now() + processingTime.toMillis() > deadline) {
-            logger.error("[$accountName] too late for this payment $paymentId")
-            paymentESService.update(paymentId) {
-                it.logProcessing(false, now(), transactionId, reason = "deadline exceeded")
-            }
-            return
-        }
+        val future = CompletableFuture<Boolean>()
 
         logger.warn(
             "[{}] Submitting payment request for payment {}",
             accountName,
             paymentId,
         )
-
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
@@ -128,23 +126,41 @@ class PaymentExternalSystemAdapterImpl(
             transactionId,
         )
 
-        paymentScope.launch {
-            handleExternalPaymentProcessingRequest(transactionId, paymentId, amount)
-        }
+        CompletableFuture.runAsync({
+            try {
+                handleExternalPaymentProcessingRequest(transactionId, paymentId, amount, future)
+            } catch (e: Exception) {
+                future.completeExceptionally(e)
+            }
+        }, executorService)
+
+        return future
     }
 
-    @Suppress("LongMethod", "NestedBlockDepth")
-    private suspend fun handleExternalPaymentProcessingRequest(
+    private fun handleExternalPaymentProcessingRequest(
         transactionId: UUID,
         paymentId: UUID,
         amount: Int,
-    ) = doRetry(
-        maxAttempts = 3,
-        delay = delay,
-        retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
-        recover = { logError(paymentId, transactionId) },
+        future: CompletableFuture<Boolean>
     ) {
-        process(transactionId, paymentId, amount)
+        try {
+            val result: Boolean = doRetry(
+                maxAttempts = 3,
+                delay = delay,
+                retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
+                recover = {
+                    logError(paymentId, transactionId)
+                    false
+                },
+            ) {
+                processPayment(transactionId, paymentId, amount)
+            } as Boolean
+
+            future.complete(result)
+        } catch (e: Exception) {
+            logError(paymentId, transactionId)
+            future.completeExceptionally(e)
+        }
     }
 
     private fun logError(paymentId: UUID, transactionId: UUID) {
@@ -158,13 +174,16 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
-    private suspend fun process(
+    @Suppress("NestedBlockDepth")
+    private fun processPayment(
         transactionId: UUID,
         paymentId: UUID,
         amount: Int,
-    ) {
+    ): Boolean {
         incomingRegCounter.increment()
         val startTime = now()
+        var success = false
+
         try {
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
@@ -194,6 +213,8 @@ class PaymentExternalSystemAdapterImpl(
                     body.result,
                     body.message,
                 )
+
+                success = body.result
 
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
                 // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
@@ -239,6 +260,8 @@ class PaymentExternalSystemAdapterImpl(
             outgoingFinishedReqCounter.increment()
             incomingFinishedReqCounter.increment()
         }
+
+        return success
     }
 
     private fun getPaymentRequest(transactionId: UUID, paymentId: UUID, amount: Int): Request {
@@ -287,7 +310,15 @@ class PaymentExternalSystemAdapterImpl(
     override fun name() = properties.accountName
 
     override fun close() {
-        paymentScope.cancel()
+        executorService.shutdown()
+        try {
+            if (!executorService.awaitTermination(30, TimeUnit.SECONDS)) {
+                executorService.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            executorService.shutdownNow()
+            Thread.currentThread().interrupt()
+        }
     }
 
     private fun now() = System.currentTimeMillis()

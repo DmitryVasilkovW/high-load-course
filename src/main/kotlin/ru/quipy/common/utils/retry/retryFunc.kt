@@ -1,22 +1,20 @@
 package ru.quipy.common.utils.retry
 
 import kotlin.reflect.KClass
-import kotlinx.coroutines.delay
 
-suspend inline fun doRetry(
+inline fun <T> doRetry(
     maxAttempts: Int = 3,
     delay: Long = 1000,
     retryOn: List<KClass<out Throwable>> = listOf(Exception::class),
-    recover: () -> Unit = {},
-    body: () -> Unit,
-) {
+    recover: () -> T,
+    body: () -> T,
+): T {
     var currentAttempts = maxAttempts
     while (currentAttempts > 0) {
         try {
-            body()
-            return
+            return body()
         } catch (ex: Throwable) {
-            currentAttempts = doDelayOrThrow(
+            currentAttempts = doDelayOrThrowSync(
                 retryOn,
                 currentAttempts,
                 delay,
@@ -24,10 +22,10 @@ suspend inline fun doRetry(
             )
         }
     }
-    recover()
+    return recover()
 }
 
-suspend fun doDelayOrThrow(
+fun doDelayOrThrowSync(
     retryOn: List<KClass<out Throwable>>,
     currentAttempts: Int,
     delay: Long,
@@ -38,7 +36,12 @@ suspend fun doDelayOrThrow(
     if (shouldRetry) {
         newCurrentAttempts--
         if (newCurrentAttempts > 0) {
-            delay(delay)
+            try {
+                Thread.sleep(delay)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw ex
+            }
         }
     } else {
         throw ex

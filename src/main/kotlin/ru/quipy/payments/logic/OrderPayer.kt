@@ -1,68 +1,43 @@
 package ru.quipy.payments.logic
 
-import jakarta.annotation.PostConstruct
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
+import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import org.springframework.http.HttpHeaders
-import org.springframework.http.HttpStatus
-import org.springframework.web.client.HttpClientErrorException
-import ru.quipy.common.utils.NamedThreadFactory
-import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
-import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
-import java.time.Duration
 
 @Service
 class OrderPayer {
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-        val waitingTime = Duration.ofMillis(50000)
     }
-
-    @Autowired
-    private lateinit var paymentService: PaymentService
-
-    private lateinit var bucket: LeakingBucketRateLimiter
 
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
-    @PostConstruct
-    fun init() {
-        bucket = paymentService.getLeakingBucket(waitingTime)
-    }
-
+    @Autowired
+    private lateinit var paymentService: PaymentService
 
     private val paymentExecutor = ThreadPoolExecutor(
-        50,
-        200,
-        60L,
+        16,
+        16,
+        0L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(20000),
+        LinkedBlockingQueue(8_000),
         NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler(),
+        CallerBlockingRejectedExecutionHandler()
     )
-    private var averageProcessingTime: Long = 0
-    private var rateLimitPerSec: Int = 0
-    private var parallelRequests: Int = 0
 
-    val rateLimiter = TokenBucketRateLimiter(50, 100, 1, TimeUnit.SECONDS)
-
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long? {
+    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-
-        if (!bucket.tick()) {
-            return null
-        }
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
@@ -78,5 +53,3 @@ class OrderPayer {
         return createdAt
     }
 }
-
-class TooManyRequestsError(val millisToRetry: Long) : RuntimeException()

@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service
 import ru.quipy.common.utils.ratelimiter.impl.leakingbucket.LeakingBucketRateLimiter
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 
 @Service
 class PaymentSystemImpl(
@@ -14,10 +15,21 @@ class PaymentSystemImpl(
         val logger = LoggerFactory.getLogger(PaymentSystemImpl::class.java)
     }
 
-    override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        paymentAccounts.forEach {
-            it.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
+    override fun submitPaymentRequest(
+        paymentId: UUID,
+        amount: Int,
+        paymentStartedAt: Long,
+        deadline: Long
+    ): CompletableFuture<Boolean> {
+        val paymentResults: List<CompletableFuture<Boolean>> = paymentAccounts.map { account ->
+            account.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
         }
+
+        return CompletableFuture.allOf(*paymentResults.toTypedArray())
+            .thenApply {
+                paymentResults.map { it.join() }
+                    .all { it }
+            }
     }
 
     override fun getLeakingBucket(waitingTime: Duration): LeakingBucketRateLimiter {
