@@ -70,10 +70,10 @@ class APIController {
             val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
             return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
         } catch (e: HttpClientErrorException.TooManyRequests) {
-            // maybe 30 seconds?
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).header("Retry-After", timestamp.toString()).build()
         }
     }
+
     class PaymentSubmissionDto(
         val timestamp: Long,
         val transactionId: UUID,
