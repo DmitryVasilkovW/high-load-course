@@ -147,15 +147,6 @@ class PaymentExternalSystemAdapterImpl(
         val currentTime = now()
         if (currentTime >= deadline) {
             logger.warn("[{}] Payment {} skipped: deadline passed before processing", accountName, paymentId)
-            paymentScope.launch {
-                try {
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, currentTime, transactionId, reason = "Deadline passed before processing")
-                    }
-                } catch (e: Exception) {
-                    logger.error("[{}] Failed to log deadline failure", accountName, e)
-                }
-            }
             return false
         }
 
@@ -213,16 +204,6 @@ class PaymentExternalSystemAdapterImpl(
                     paymentId,
                     body.result
                 )
-
-                paymentScope.launch {
-                    try {
-                        paymentESService.update(paymentId) {
-                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                        }
-                    } catch (e: Exception) {
-                        logger.error("[{}] Failed to update payment {} in DB", accountName, paymentId, e)
-                    }
-                }
 
                 httpHandledRequestsTotalAccountCounter.increment()
                 val processingTime = now() - startTime
