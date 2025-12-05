@@ -43,7 +43,7 @@ class OrderPayer {
         }
     }
 
-    val rateLimiter = TokenBucketRateLimiter(1100, 2000, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(500, 500, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (paymentExecutor.queue.remainingCapacity() == 0) {

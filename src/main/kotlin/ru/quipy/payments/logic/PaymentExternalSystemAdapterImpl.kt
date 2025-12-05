@@ -83,18 +83,27 @@ class PaymentExternalSystemAdapterImpl(
         httpRequestsTotalAccountCounter.increment()
 
         logger.warn(
-            "[{}] Submitting payment request for payment {}",
+            "[{}] Submitting payment request for payment {}, deadline: {}, now: {}",
             accountName,
             paymentId,
+            deadline,
+            now()
         )
 
+        val currentTime = now()
+        if (currentTime >= deadline) {
+            logger.error("[{}] Payment {} deadline already passed at submission", accountName, paymentId)
+            val failedFuture = CompletableFuture<Boolean>()
+            failedFuture.complete(false)
+            return failedFuture
+        }
+
         val transactionId = UUID.randomUUID()
-        val future = CompletableFuture<Boolean>()
 
         paymentScope.launch {
             try {
                 paymentESService.update(paymentId) {
-                    it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
+                    it.logSubmission(success = true, transactionId, currentTime, Duration.ofMillis(currentTime - paymentStartedAt))
                 }
             } catch (e: Exception) {
                 logger.error("[{}] Failed to log submission for payment {}", accountName, paymentId, e)
@@ -102,15 +111,23 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info(
-            "[{}] Submit: {} , txId: {}",
+            "[{}] Submit: {} , txId: {}, timeLeft: {}ms",
             accountName,
             paymentId,
             transactionId,
+            deadline - currentTime
         )
+
+        val future = CompletableFuture<Boolean>()
 
         paymentScope.launch {
             try {
-                val result = handleExternalPaymentProcessingRequestWithResult(transactionId, paymentId, amount)
+                val result = handleExternalPaymentProcessingRequestWithDeadline(
+                    transactionId = transactionId,
+                    paymentId = paymentId,
+                    amount = amount,
+                    deadline = deadline
+                )
                 future.complete(result)
             } catch (e: Exception) {
                 logger.error("[{}] Payment processing failed for {}: {}", accountName, paymentId, e.message)
@@ -121,11 +138,65 @@ class PaymentExternalSystemAdapterImpl(
         return future
     }
 
-    private suspend fun handleExternalPaymentProcessingRequestWithResult(
+    private suspend fun handleExternalPaymentProcessingRequestWithDeadline(
         transactionId: UUID,
         paymentId: UUID,
-        amount: Int
-    ): Boolean = processWithResult(transactionId, paymentId, amount)
+        amount: Int,
+        deadline: Long
+    ): Boolean {
+        val currentTime = now()
+        if (currentTime >= deadline) {
+            logger.warn("[{}] Payment {} skipped: deadline passed before processing", accountName, paymentId)
+            paymentScope.launch {
+                try {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, currentTime, transactionId, reason = "Deadline passed before processing")
+                    }
+                } catch (e: Exception) {
+                    logger.error("[{}] Failed to log deadline failure", accountName, e)
+                }
+            }
+            return false
+        }
+
+        val timeLeftForAttempt = minOf(deadline - currentTime, MAX_ATTEMPT_TIME)
+
+        return try {
+            withTimeout(timeLeftForAttempt) {
+                doRetry(
+                    maxAttempts = 3,
+                    delay = delay,
+                    retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
+                    recover = {
+                        logError(paymentId, transactionId, "All retry attempts failed or timeout")
+                        false
+                    }
+                ) {
+                    processWithResult(transactionId, paymentId, amount)
+                }
+            }
+        } catch (e: TimeoutCancellationException) {
+            logger.warn("[{}] Payment {} timed out after {}ms", accountName, paymentId, timeLeftForAttempt)
+            logError(paymentId, transactionId, "Processing timeout")
+            false
+        } catch (e: Exception) {
+            logger.error("[{}] Payment {} failed: {}", accountName, paymentId, e.message, e)
+            logError(paymentId, transactionId, "Exception: ${e.message}")
+            false
+        }
+    }
+
+    private fun logError(paymentId: UUID, transactionId: UUID, reason: String) {
+        paymentScope.launch {
+            try {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(false, now(), transactionId, reason = reason)
+                }
+            } catch (e: Exception) {
+                logger.error("[{}] Failed to log error for payment {}", accountName, paymentId, e)
+            }
+        }
+    }
 
     private suspend fun processWithResult(
         transactionId: UUID,
@@ -140,31 +211,42 @@ class PaymentExternalSystemAdapterImpl(
             outgoingReqCounter.increment()
 
             rateLimiter.tick()
-            val response = client.newCall(request).execute()
+
+            val response = withContext(Dispatchers.IO) {
+                client.newCall(request).execute()
+            }
 
             response.use { resp ->
                 val body = try {
                     mapper.readValue(resp.body?.string(), ExternalSysResponse::class.java)
                 } catch (e: Exception) {
                     logger.error(
-                        "[{}] [ERROR] Payment processed for txId: {}, payment: {}, result code: {}, reason: {}",
+                        "[{}] Failed to parse response for txId: {}, payment: {}",
                         accountName,
                         transactionId,
                         paymentId,
-                        resp.code,
-                        resp.body?.string(),
+                        e
                     )
                     ExternalSysResponse(transactionId.toString(), paymentId.toString(), false, e.message)
                 }
 
-                logger.warn(
-                    "[{}] Payment processed for txId: {}, payment: {}, succeeded: {}, message: {}",
+                logger.info(
+                    "[{}] Payment processed for txId: {}, payment: {}, succeeded: {}",
                     accountName,
                     transactionId,
                     paymentId,
-                    body.result,
-                    body.message,
+                    body.result
                 )
+
+                paymentScope.launch {
+                    try {
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                        }
+                    } catch (e: Exception) {
+                        logger.error("[{}] Failed to update payment {} in DB", accountName, paymentId, e)
+                    }
+                }
 
                 httpHandledRequestsTotalAccountCounter.increment()
                 val processingTime = now() - startTime
@@ -176,16 +258,6 @@ class PaymentExternalSystemAdapterImpl(
             retryCounter.increment()
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
-                accountName,
-                transactionId,
-                paymentId,
-                e,
-            )
-            throw e
-        } catch (e: InterruptedIOException) {
-            retryCounter.increment()
-            logger.error(
-                "[{}] Payment interrupted for txId: {}, payment: {}",
                 accountName,
                 transactionId,
                 paymentId,
@@ -265,5 +337,6 @@ class PaymentExternalSystemAdapterImpl(
         val emptyBody = ByteArray(0).toRequestBody(null)
         val mapper = ObjectMapper().registerKotlinModule()
         private const val PORT = 80
+        private const val MAX_ATTEMPT_TIME = 30000L
     }
 }
