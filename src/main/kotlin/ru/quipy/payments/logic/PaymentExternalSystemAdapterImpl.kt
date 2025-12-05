@@ -199,7 +199,7 @@ class PaymentExternalSystemAdapterImpl(
             }.join()
 
             val result = doRetry(
-                maxAttempts = 3,
+                maxAttempts = 1,
                 delay = properties.averageProcessingTime.toMillis(),
                 retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
                 recover = { handleRetryFailure(request) }
