@@ -14,16 +14,12 @@ import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 
 @Service
 class OrderPayer {
-
-    companion object {
-        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-    }
 
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
@@ -31,17 +27,7 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val paymentExecutor = object : ScheduledThreadPoolExecutor(
-        2000,
-        NamedThreadFactory("payment-submission-executor")
-    ) {
-        init {
-            setMaximumPoolSize(2000)
-            setKeepAliveTime(0L, TimeUnit.MILLISECONDS)
-            setRejectedExecutionHandler(CallerBlockingRejectedExecutionHandler())
-            removeOnCancelPolicy = true
-        }
-    }
+    private val paymentExecutor = Scheduler
 
     val rateLimiter = TokenBucketRateLimiter(500, 500, 1, TimeUnit.SECONDS)
 
@@ -101,33 +87,49 @@ class OrderPayer {
         val paymentRequest = paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         val start = System.currentTimeMillis()
 
-        paymentRequest
-            .orTimeout(timeLeft, TimeUnit.MILLISECONDS)
-            .whenCompleteAsync({ success, error ->
-                System.currentTimeMillis() - start
-
-                when {
-                    error != null -> {
-                        logger.warn(
-                            "Payment $paymentId attempt #$attempt failed: ${error.message}, " +
-                                    "timeLeft=${deadline - System.currentTimeMillis()}ms"
-                        )
-                        scheduleRetry(paymentId, amount, createdAt, deadline, attempt)
-                    }
-
-                    success == true -> {
-                        logger.info("Payment $paymentId attempt #$attempt succeeded")
-                    }
-
-                    else -> {
-                        logger.info("Payment $paymentId attempt #$attempt returned failure")
-                        scheduleRetry(paymentId, amount, createdAt, deadline, attempt)
-                    }
-                }
-            }, paymentExecutor)
+        process(paymentRequest, timeLeft, start, paymentId, attempt, deadline, amount, createdAt)
     }
 
-    private fun scheduleRetry(
+    private fun process(
+        paymentRequest: CompletableFuture<Boolean>,
+        timeLeft: Long,
+        start: Long,
+        paymentId: UUID,
+        attempt: Int,
+        deadline: Long,
+        amount: Int,
+        createdAt: Long
+    ) {
+        paymentRequest
+            .orTimeout(timeLeft, TimeUnit.MILLISECONDS)
+            .whenCompleteAsync(
+                { success, error ->
+                    System.currentTimeMillis() - start
+
+                    when {
+                        error != null -> {
+                            logger.warn(
+                                "Payment $paymentId attempt #$attempt failed: ${error.message}, " +
+                                        "timeLeft=${deadline - System.currentTimeMillis()}ms"
+                            )
+                            scheduleProcess(paymentId, amount, createdAt, deadline, attempt)
+                        }
+
+                        success == true -> {
+                            logger.info("Payment $paymentId attempt #$attempt succeeded")
+                        }
+
+                        else -> {
+                            logger.info("Payment $paymentId attempt #$attempt returned failure")
+                            scheduleProcess(paymentId, amount, createdAt, deadline, attempt)
+                        }
+                    }
+                },
+                paymentExecutor,
+            )
+    }
+
+    private fun scheduleProcess(
         paymentId: UUID,
         amount: Int,
         createdAt: Long,
@@ -148,5 +150,21 @@ class OrderPayer {
             100L,
             TimeUnit.MILLISECONDS
         )
+    }
+
+    companion object {
+        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
+    }
+}
+
+object Scheduler : ScheduledThreadPoolExecutor(
+    2000,
+    NamedThreadFactory("payment-submission-executor")
+) {
+    init {
+        setMaximumPoolSize(2000)
+        setKeepAliveTime(0L, TimeUnit.MILLISECONDS)
+        setRejectedExecutionHandler(CallerBlockingRejectedExecutionHandler())
+        removeOnCancelPolicy = true
     }
 }
