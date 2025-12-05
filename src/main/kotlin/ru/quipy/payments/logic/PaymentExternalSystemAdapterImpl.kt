@@ -194,12 +194,10 @@ class PaymentExternalSystemAdapterImpl(
         activeRequests.incrementAndGet()
 
         try {
-            // Rate limiting
             rateLimiterScope.launch {
                 rateLimiter.tick()
             }.join()
 
-            // Обработка с ретраями
             val result = doRetry(
                 maxAttempts = 3,
                 delay = properties.averageProcessingTime.toMillis(),
@@ -209,7 +207,6 @@ class PaymentExternalSystemAdapterImpl(
                 executePaymentRequest(request)
             }
 
-            // Обновление результата в БД
             updatePaymentInDatabase(request, result as ExternalSysResponse)
         } finally {
             activeRequests.decrementAndGet()
@@ -226,7 +223,6 @@ class PaymentExternalSystemAdapterImpl(
             httpSemaphore.withPermit {
                 val httpRequest = getPaymentRequest(request)
 
-                // Асинхронный вызов HTTP
                 val response = withContext(Dispatchers.IO) {
                     client.newCall(httpRequest).execute()
                 }
