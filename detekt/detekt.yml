@@ -1,0 +1,57 @@
+formatting:
+  ArgumentListWrapping:
+    active: false
+  ImportOrdering:
+    active: false
+  MaximumLineLength:
+    excludes: [ "**/test/**" ]
+  FunctionReturnTypeSpacing:
+    active: true
+  TrailingCommaOnDeclarationSite:
+    active: true
+    autoCorrect: true
+  TrailingCommaOnCallSite:
+    active: true
+    autoCorrect: true
+
+style:
+  ExplicitItLambdaParameter:
+    active: false
+  MagicNumber:
+    ignorePropertyDeclaration: true
+    excludes: [ "**/test/**","**/*Config.kt", "**/build.gradle.kts" ]
+  UnusedPrivateMember:
+    excludes: [ "**/test/**" ]
+  UnusedPrivateProperty:
+    excludes: [ "**/test/**" ]
+  UseCheckOrError:
+    active: false
+  UseRequire:
+    active: false
+  ReturnCount:
+    max: 3
+
+complexity:
+  TooManyFunctions:
+    active: false
+  LongMethod:
+    excludes: [ "**/test/**",]
+  LongParameterList:
+    functionThreshold: 10
+    constructorThreshold: 10
+    ignoreDefaultParameters: true
+    excludes: [ "**/test/**",]
+
+naming:
+  FunctionNaming:
+    active: true
+    functionPattern: '^([a-z$][a-zA-Z$0-9]*)|(`.*`)$'
+    excludeClassPattern: '$^'
+
+performance:
+  SpreadOperator:
+    active: false
+
+exceptions:
+  TooGenericExceptionCaught:
+    active: false
