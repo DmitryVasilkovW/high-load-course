@@ -125,16 +125,7 @@ class PaymentExternalSystemAdapterImpl(
         transactionId: UUID,
         paymentId: UUID,
         amount: Int
-    ): Boolean = doRetry(
-        maxAttempts = 1,
-        delay = delay,
-        retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
-        recover = {
-            false
-        }
-    ) {
-        processWithResult(transactionId, paymentId, amount)
-    }
+    ): Boolean = processWithResult(transactionId, paymentId, amount)
 
     private suspend fun processWithResult(
         transactionId: UUID,
