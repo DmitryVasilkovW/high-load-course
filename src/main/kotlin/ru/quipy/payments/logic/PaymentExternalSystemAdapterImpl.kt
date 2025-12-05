@@ -25,6 +25,7 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
@@ -42,15 +43,12 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(Duration.ofSeconds(10))
         .readTimeout(Duration.ofSeconds(30))
-        .writeTimeout(Duration.ofSeconds(10))
-        .callTimeout(Duration.ofSeconds(35))
-        .dispatcher(Dispatcher().apply {
-            maxRequests = 2000
-            maxRequestsPerHost = 2000
+        .dispatcher( Dispatcher(Executors.newFixedThreadPool(10000)).apply {
+            maxRequests = parallelRequests
+            maxRequestsPerHost = parallelRequests
         })
-        .connectionPool(ConnectionPool(100, 5, TimeUnit.MINUTES))
+        .connectionPool(ConnectionPool(parallelRequests, 20, TimeUnit.SECONDS))
         .build()
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
