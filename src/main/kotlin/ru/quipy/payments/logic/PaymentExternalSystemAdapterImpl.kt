@@ -57,7 +57,6 @@ class PaymentExternalSystemAdapterImpl(
     )
 
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val delay = max(requestAverageProcessingTime.toMillis(), 6000).toLong()
 
     private val coroutineDispatcher = Executors.newFixedThreadPool(parallelRequests).asCoroutineDispatcher()
     private val paymentScope = CoroutineScope(coroutineDispatcher + SupervisorJob())
@@ -109,7 +108,7 @@ class PaymentExternalSystemAdapterImpl(
 
         return paymentScope.future {
             try {
-                processPaymentWithRetry(transactionId, paymentId, amount, deadline)
+                executeSinglePayment(transactionId, paymentId, amount, deadline)
             } catch (e: Exception) {
                 logger.error("[{}] Payment processing failed for {}: {}", accountName, paymentId, e.message, e)
                 false
@@ -117,45 +116,15 @@ class PaymentExternalSystemAdapterImpl(
         }
     }
 
-    private suspend fun processPaymentWithRetry(
+    private suspend fun executeSinglePayment(
         transactionId: UUID,
         paymentId: UUID,
         amount: Int,
         deadline: Long
     ): Boolean {
-        val maxAttempts = 3
-        var attempt = 1
-
-        while (attempt <= maxAttempts) {
-            try {
-                val result = processPaymentAttempt(transactionId, paymentId, amount, deadline, attempt)
-                if (result != null) return result
-            } catch (e: Exception) {
-                logger.warn("[{}] Payment {} attempt #{} failed: {}", accountName, paymentId, attempt, e.message)
-            }
-
-            attempt++
-
-            if (attempt <= maxAttempts) {
-                val delayMs = minOf(100L * (1L shl (attempt - 2)), 5000L)
-                delay(delayMs)
-            }
-        }
-
-        logger.error("[{}] Payment {} failed after {} attempts", accountName, paymentId, maxAttempts)
-        return false
-    }
-
-    private suspend fun processPaymentAttempt(
-        transactionId: UUID,
-        paymentId: UUID,
-        amount: Int,
-        deadline: Long,
-        attempt: Int
-    ): Boolean? {
         val currentTime = now()
         if (currentTime >= deadline) {
-            logger.warn("[{}] Payment {} attempt #{}: deadline passed", accountName, paymentId, attempt)
+            logger.warn("[{}] Payment {}: deadline passed before execution", accountName, paymentId)
             return false
         }
 
@@ -164,20 +133,22 @@ class PaymentExternalSystemAdapterImpl(
 
         return try {
             withTimeout(timeout) {
-                executeSinglePayment(transactionId, paymentId, amount, attempt)
+                processPayment(transactionId, paymentId, amount)
             }
         } catch (e: TimeoutCancellationException) {
-            logger.warn("[{}] Payment {} attempt #{} timed out after {}ms", accountName, paymentId, attempt, timeout)
-            null
+            logger.warn("[{}] Payment {} timed out after {}ms", accountName, paymentId, timeout)
+            false
+        } catch (e: Exception) {
+            logger.error("[{}] Payment {} failed: {}", accountName, paymentId, e.message, e)
+            false
         }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun executeSinglePayment(
+    private suspend fun processPayment(
         transactionId: UUID,
         paymentId: UUID,
-        amount: Int,
-        attempt: Int
+        amount: Int
     ): Boolean {
         incomingRegCounter.increment()
         val startTime = now()
@@ -230,12 +201,11 @@ class PaymentExternalSystemAdapterImpl(
                 }
 
                 logger.debug(
-                    "[{}] Payment processed for txId: {}, payment: {}, succeeded: {}, attempt: {}",
+                    "[{}] Payment processed for txId: {}, payment: {}, succeeded: {}",
                     accountName,
                     transactionId,
                     paymentId,
-                    body.result,
-                    attempt
+                    body.result
                 )
 
                 paymentScope.launch {
@@ -257,33 +227,30 @@ class PaymentExternalSystemAdapterImpl(
         } catch (e: SocketTimeoutException) {
             retryCounter.increment()
             logger.error(
-                "[{}] Payment timeout for txId: {}, payment: {}, attempt: {}",
+                "[{}] Payment timeout for txId: {}, payment: {}",
                 accountName,
                 transactionId,
                 paymentId,
-                attempt,
                 e
             )
             throw e
         } catch (e: InterruptedIOException) {
             retryCounter.increment()
             logger.error(
-                "[{}] Payment interrupted for txId: {}, payment: {}, attempt: {}",
+                "[{}] Payment interrupted for txId: {}, payment: {}",
                 accountName,
                 transactionId,
                 paymentId,
-                attempt,
                 e
             )
             throw e
         } catch (e: Exception) {
             retryCounter.increment()
             logger.error(
-                "[{}] Payment failed for txId: {}, payment: {}, attempt: {}",
+                "[{}] Payment failed for txId: {}, payment: {}",
                 accountName,
                 transactionId,
                 paymentId,
-                attempt,
                 e
             )
             throw e
