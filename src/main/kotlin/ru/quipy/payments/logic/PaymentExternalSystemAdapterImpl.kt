@@ -163,38 +163,14 @@ class PaymentExternalSystemAdapterImpl(
 
         return try {
             withTimeout(timeLeftForAttempt) {
-                doRetry(
-                    maxAttempts = 3,
-                    delay = delay,
-                    retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
-                    recover = {
-                        logError(paymentId, transactionId, "All retry attempts failed or timeout")
-                        false
-                    }
-                ) {
-                    processWithResult(transactionId, paymentId, amount)
-                }
+                processWithResult(transactionId, paymentId, amount)
             }
         } catch (e: TimeoutCancellationException) {
             logger.warn("[{}] Payment {} timed out after {}ms", accountName, paymentId, timeLeftForAttempt)
-            logError(paymentId, transactionId, "Processing timeout")
             false
         } catch (e: Exception) {
             logger.error("[{}] Payment {} failed: {}", accountName, paymentId, e.message, e)
-            logError(paymentId, transactionId, "Exception: ${e.message}")
             false
-        }
-    }
-
-    private fun logError(paymentId: UUID, transactionId: UUID, reason: String) {
-        paymentScope.launch {
-            try {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(false, now(), transactionId, reason = reason)
-                }
-            } catch (e: Exception) {
-                logger.error("[{}] Failed to log error for payment {}", accountName, paymentId, e)
-            }
         }
     }
 
