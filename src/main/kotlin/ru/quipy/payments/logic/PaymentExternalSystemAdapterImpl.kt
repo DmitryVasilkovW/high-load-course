@@ -130,7 +130,6 @@ class PaymentExternalSystemAdapterImpl(
         delay = delay,
         retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
         recover = {
-            logError(paymentId, transactionId)
             false
         }
     ) {
@@ -176,16 +175,6 @@ class PaymentExternalSystemAdapterImpl(
                     body.message,
                 )
 
-                paymentScope.launch {
-                    try {
-                        paymentESService.update(paymentId) {
-                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                        }
-                    } catch (e: Exception) {
-                        logger.error("[{}] Failed to update payment {} in DB", accountName, paymentId, e)
-                    }
-                }
-
                 httpHandledRequestsTotalAccountCounter.increment()
                 val processingTime = now() - startTime
                 outgoingRequestProcessingTimeDistributionSummary.record(processingTime.toDouble())
@@ -226,17 +215,6 @@ class PaymentExternalSystemAdapterImpl(
             semaphore.release()
             outgoingFinishedReqCounter.increment()
             incomingFinishedReqCounter.increment()
-        }
-    }
-
-    private fun logError(paymentId: UUID, transactionId: UUID) {
-        paymentESService.update(paymentId) {
-            it.logProcessing(
-                false,
-                now(),
-                transactionId,
-                reason = "All retry attempts failed",
-            )
         }
     }
 
