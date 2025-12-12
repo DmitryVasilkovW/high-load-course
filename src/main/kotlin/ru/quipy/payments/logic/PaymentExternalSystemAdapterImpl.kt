@@ -88,12 +88,6 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-        paymentESService.update(paymentId) {
-            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-        }
-
         logger.info(
             "[{}] Submit: {} , txId: {}",
             accountName,
@@ -115,20 +109,8 @@ class PaymentExternalSystemAdapterImpl(
         maxAttempts = 3,
         delay = delay,
         retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
-        recover = { logError(paymentId, transactionId) },
     ) {
         process(transactionId, paymentId, amount)
-    }
-
-    private fun logError(paymentId: UUID, transactionId: UUID) {
-        paymentESService.update(paymentId) {
-            it.logProcessing(
-                false,
-                now(),
-                transactionId,
-                reason = "All retry attempts failed",
-            )
-        }
     }
 
     private suspend fun process(
@@ -168,8 +150,6 @@ class PaymentExternalSystemAdapterImpl(
                     body.message,
                 )
 
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
