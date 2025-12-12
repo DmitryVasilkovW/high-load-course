@@ -119,11 +119,11 @@ class PaymentExternalSystemAdapterImpl(
         incomingRegCounter.increment()
         val startTime = now()
         try {
+            rateLimiter.tickBlocking()
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
             outgoingReqCounter.increment()
 
-            rateLimiter.tickBlocking()
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
