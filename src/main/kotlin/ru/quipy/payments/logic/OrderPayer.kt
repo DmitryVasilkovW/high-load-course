@@ -35,7 +35,7 @@ class OrderPayer {
         32,
         60L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(5),
+        LinkedBlockingQueue(50),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler(),
     )
