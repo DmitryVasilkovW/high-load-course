@@ -53,7 +53,7 @@ class PaymentExternalSystemAdapterImpl(
     )
 
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val delay = max(requestAverageProcessingTime.toMillis(), 6000).toLong()
+    private val delay = max(requestAverageProcessingTime.toMillis(), 1000).toLong()
 
     private val paymentScope = CoroutineScope(Dispatchers.IO)
     private val semaphore = Semaphore(permits = parallelRequests)
