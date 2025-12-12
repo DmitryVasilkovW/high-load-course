@@ -44,7 +44,7 @@ class PaymentExternalSystemAdapterImpl(
             maxRequests = parallelRequests * 2
             maxRequestsPerHost = parallelRequests * 2
         })
-        .connectionPool(ConnectionPool(parallelRequests, 20, TimeUnit.SECONDS))
+        .connectionPool(ConnectionPool(parallelRequests, 3, TimeUnit.SECONDS))
         .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
 
