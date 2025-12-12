@@ -2,15 +2,7 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
-import java.time.Duration
-import java.util.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,6 +14,10 @@ import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
+import java.time.Duration
+import java.util.*
 import java.util.concurrent.Executors
 import kotlin.math.max
 
@@ -127,7 +123,7 @@ class PaymentExternalSystemAdapterImpl(
             val request = getPaymentRequest(transactionId, paymentId, amount)
             outgoingReqCounter.increment()
 
-            rateLimiter.tick()
+            rateLimiter.tickBlocking()
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
