@@ -110,7 +110,7 @@ class PaymentExternalSystemAdapterImpl(
     ) = doRetry(
         maxAttempts = 2,
         delay = delay,
-        retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
+        retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class),
     ) {
         process(transactionId, paymentId, amount)
     }
