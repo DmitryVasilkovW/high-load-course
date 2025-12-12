@@ -108,7 +108,7 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         amount: Int,
     ) = doRetry(
-        maxAttempts = 3,
+        maxAttempts = 2,
         delay = delay,
         retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class, Exception::class),
     ) {
