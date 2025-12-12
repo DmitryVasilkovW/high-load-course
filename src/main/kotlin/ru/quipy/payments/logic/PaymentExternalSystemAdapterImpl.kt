@@ -3,6 +3,8 @@ package ru.quipy.payments.logic
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import kotlinx.coroutines.*
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -19,6 +21,7 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.max
 
 // Advice: always treat time as a Duration
@@ -35,9 +38,13 @@ class PaymentExternalSystemAdapterImpl(
     private val parallelRequests = properties.parallelRequests
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(Duration.ofSeconds(10))
         .readTimeout(Duration.ofSeconds(30))
-        .writeTimeout(Duration.ofSeconds(10))
+        .callTimeout(Duration.ofSeconds(35))
+        .dispatcher(Dispatcher(Executors.newFixedThreadPool(parallelRequests)).apply {
+            maxRequests = parallelRequests * 2
+            maxRequestsPerHost = parallelRequests * 2
+        })
+        .connectionPool(ConnectionPool(parallelRequests, 20, TimeUnit.SECONDS))
         .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
 
