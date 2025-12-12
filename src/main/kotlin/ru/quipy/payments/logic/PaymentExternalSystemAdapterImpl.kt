@@ -8,6 +8,8 @@ import java.time.Duration
 import java.util.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -22,6 +24,7 @@ import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
+import java.util.concurrent.Executors
 import kotlin.math.max
 
 // Advice: always treat time as a Duration
@@ -55,8 +58,9 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val delay = max(requestAverageProcessingTime.toMillis(), 1000).toLong()
 
-    private val paymentScope = CoroutineScope(Dispatchers.IO)
-    private val semaphore = Semaphore(permits = parallelRequests)
+    private val coroutineDispatcher = Executors.newFixedThreadPool(parallelRequests).asCoroutineDispatcher()
+    private val paymentScope = CoroutineScope(coroutineDispatcher + SupervisorJob())
+    private val semaphore = kotlinx.coroutines.sync.Semaphore(permits = parallelRequests)
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
@@ -150,8 +154,14 @@ class PaymentExternalSystemAdapterImpl(
                     body.message,
                 )
 
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                paymentScope.launch {
+                    try {
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                        }
+                    } catch (e: Exception) {
+                        logger.error("[{}] Failed to update payment {} in DB", accountName, paymentId, e)
+                    }
                 }
             }
             httpHandledRequestsTotalAccountCounter.increment()
