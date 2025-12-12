@@ -43,7 +43,7 @@ class OrderPayer {
     private var rateLimitPerSec: Int = 0
     private var parallelRequests: Int = 0
 
-    val rateLimiter = TokenBucketRateLimiter(8, 8, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(500, 500, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (!rateLimiter.tick()) {
