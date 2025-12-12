@@ -48,28 +48,28 @@ class OrderPayer {
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (!rateLimiter.tick()) {
             val retryAfter = System.currentTimeMillis() + 1000
+            val headers = HttpHeaders()
+            headers.set("Retry-After", retryAfter.toString())
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Rate limit exceeded",
-                HttpHeaders.EMPTY,
+                headers,
                 ByteArray(0),
                 null,
-            ).also {
-                it.responseHeaders?.set("Retry-After", retryAfter.toString())
-            }
+            )
         }
 
         if (paymentExecutor.queue.size >= paymentExecutor.queue.remainingCapacity()) {
             val retryAfter = System.currentTimeMillis() + 1000
+            val headers = HttpHeaders()
+            headers.set("Retry-After", retryAfter.toString())
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Payment executor queue is full",
-                HttpHeaders.EMPTY,
+                headers,
                 ByteArray(0),
                 null,
-            ).also {
-                it.responseHeaders?.set("Retry-After", retryAfter.toString())
-            }
+            )
         }
         val createdAt = System.currentTimeMillis()
 
@@ -87,5 +87,3 @@ class OrderPayer {
         return createdAt
     }
 }
-
-class TooManyRequestsError(val millisToRetry: Long) : RuntimeException()
