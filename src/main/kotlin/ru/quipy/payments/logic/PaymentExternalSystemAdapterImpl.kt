@@ -7,12 +7,10 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
