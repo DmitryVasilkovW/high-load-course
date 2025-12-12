@@ -32,10 +32,10 @@ class OrderPayer {
 
     private val paymentExecutor = ThreadPoolExecutor(
         16,
-        16,
-        0L,
+        32,
+        60L,
         TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(16000),
+        LinkedBlockingQueue(50),
         NamedThreadFactory("payment-submission-executor"),
         CallerBlockingRejectedExecutionHandler(),
     )
@@ -43,19 +43,34 @@ class OrderPayer {
     private var rateLimitPerSec: Int = 0
     private var parallelRequests: Int = 0
 
-    val rateLimiter = TokenBucketRateLimiter(11, 11, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(500, 500, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (!rateLimiter.tick()) {
+            val retryAfter = System.currentTimeMillis() + 1000
+            val headers = HttpHeaders()
+            headers.set("Retry-After", retryAfter.toString())
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
-                "Payment executor queue is full",
-                HttpHeaders.EMPTY,
+                "Rate limit exceeded",
+                headers,
                 ByteArray(0),
                 null,
             )
         }
 
+        if (paymentExecutor.queue.size >= paymentExecutor.queue.remainingCapacity()) {
+            val retryAfter = System.currentTimeMillis() + 1000
+            val headers = HttpHeaders()
+            headers.set("Retry-After", retryAfter.toString())
+            throw HttpClientErrorException.create(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Payment executor queue is full",
+                headers,
+                ByteArray(0),
+                null,
+            )
+        }
         val createdAt = System.currentTimeMillis()
 
         paymentExecutor.submit {
@@ -66,11 +81,9 @@ class OrderPayer {
                     amount,
                 )
             }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+            logger.trace("Payment {} for order {} created.", createdEvent.paymentId, orderId)
             paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         }
         return createdAt
     }
 }
-
-class TooManyRequestsError(val millisToRetry: Long) : RuntimeException()

@@ -2,11 +2,9 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.*
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -14,14 +12,17 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
+import ru.quipy.common.utils.retry.doRetry
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import org.testcontainers.shaded.com.google.common.util.concurrent.Striped.semaphore
-import ru.quipy.common.utils.retry.doRetry
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import kotlin.math.max
 
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
@@ -36,7 +37,15 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient.Builder()
+        .readTimeout(Duration.ofSeconds(30))
+        .callTimeout(Duration.ofSeconds(35))
+        .dispatcher(Dispatcher(Executors.newFixedThreadPool(parallelRequests)).apply {
+            maxRequests = parallelRequests * 2
+            maxRequestsPerHost = parallelRequests * 2
+        })
+        .connectionPool(ConnectionPool(parallelRequests, 3, TimeUnit.SECONDS))
+        .build()
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
 
     private val host = parseHost(paymentProviderHostPort)
@@ -48,14 +57,29 @@ class PaymentExternalSystemAdapterImpl(
     )
 
     private val requestAverageProcessingTime = properties.averageProcessingTime
-    private val delay = requestAverageProcessingTime.toMillis().toDouble().toLong()
+    private val delay = max(requestAverageProcessingTime.toMillis(), 1000).toLong()
 
-    private val paymentScope = CoroutineScope(Dispatchers.IO)
-    private val semaphore = Semaphore(permits = parallelRequests)
+    private val coroutineDispatcher = Executors.newFixedThreadPool(parallelRequests).asCoroutineDispatcher()
+    private val paymentScope = CoroutineScope(coroutineDispatcher + SupervisorJob())
+    private val semaphore = kotlinx.coroutines.sync.Semaphore(permits = parallelRequests)
 
     private val httpHandledRequestsTotalAccountCounter =
         metricBuilder.buildHttpHandledRequestsTotalCounter(properties.accountName)
-    private val httpRequestsTotalAccountCounter = metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+    private val httpRequestsTotalAccountCounter =
+        metricBuilder.buildHttpRequestsTotalCounter(properties.accountName)
+    private val incomingRegCounter =
+        metricBuilder.buildIncomingRegCounter(properties.accountName)
+    private val incomingFinishedReqCounter =
+        metricBuilder.buildIncomingFinishedReqCounter(properties.accountName)
+    private val outgoingReqCounter =
+        metricBuilder.buildOutgoingReqCounter(properties.accountName)
+    private val outgoingFinishedReqCounter =
+        metricBuilder.buildOutgoingFinishedReqCounter(properties.accountName)
+    private val retryCounter =
+        metricBuilder.buildRetryCounter(properties.accountName)
+    private val outgoingRequestProcessingTimeDistributionSummary =
+        metricBuilder.buildOutgoingRequestProcessingTimeDistributionSummary()
+
 
     @Suppress("SwallowedException")
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
@@ -68,12 +92,6 @@ class PaymentExternalSystemAdapterImpl(
         )
 
         val transactionId = UUID.randomUUID()
-
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
-        paymentESService.update(paymentId) {
-            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
-        }
 
         logger.info(
             "[{}] Submit: {} , txId: {}",
@@ -93,17 +111,11 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         amount: Int,
     ) = doRetry(
+        maxAttempts = 2,
         delay = delay,
-        retryOn = listOf(SocketTimeoutException::class, Exception::class),
-        recover = { logError(paymentId, transactionId) },
+        retryOn = listOf(SocketTimeoutException::class, InterruptedIOException::class),
     ) {
         process(transactionId, paymentId, amount)
-    }
-
-    private fun logError(paymentId: UUID, transactionId: UUID) {
-        paymentESService.update(paymentId) {
-            it.logProcessing(false, now(), transactionId, reason = "All retry attempts failed")
-        }
     }
 
     private suspend fun process(
@@ -111,11 +123,14 @@ class PaymentExternalSystemAdapterImpl(
         paymentId: UUID,
         amount: Int,
     ) {
+        incomingRegCounter.increment()
+        val startTime = now()
         try {
+            rateLimiter.tickBlocking()
             semaphore.acquire()
             val request = getPaymentRequest(transactionId, paymentId, amount)
+            outgoingReqCounter.increment()
 
-            rateLimiter.tick()
             client.newCall(request).execute().use { response ->
                 val body = try {
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
@@ -140,14 +155,21 @@ class PaymentExternalSystemAdapterImpl(
                     body.message,
                 )
 
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                paymentScope.launch {
+                    try {
+                        paymentESService.update(paymentId) {
+                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
+                        }
+                    } catch (e: Exception) {
+                        logger.error("[{}] Failed to update payment {} in DB", accountName, paymentId, e)
+                    }
                 }
             }
             httpHandledRequestsTotalAccountCounter.increment()
+            val processingTime = now() - startTime
+            outgoingRequestProcessingTimeDistributionSummary.record(processingTime.toDouble())
         } catch (e: SocketTimeoutException) {
+            retryCounter.increment()
             logger.error(
                 "[{}] Payment timeout for txId: {}, payment: {}",
                 accountName,
@@ -156,7 +178,18 @@ class PaymentExternalSystemAdapterImpl(
                 e,
             )
             throw e
+        } catch (e: InterruptedIOException) {
+            retryCounter.increment()
+            logger.error(
+                "[{}] Payment interrupted for txId: {}, payment: {}",
+                accountName,
+                transactionId,
+                paymentId,
+                e,
+            )
+            throw e
         } catch (e: Exception) {
+            retryCounter.increment()
             logger.error(
                 "[{}] Payment failed for txId: {}, payment: {}",
                 accountName,
@@ -167,6 +200,8 @@ class PaymentExternalSystemAdapterImpl(
             throw e
         } finally {
             semaphore.release()
+            outgoingFinishedReqCounter.increment()
+            incomingFinishedReqCounter.increment()
         }
     }
 
