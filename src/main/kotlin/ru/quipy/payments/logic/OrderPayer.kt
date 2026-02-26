@@ -19,7 +19,6 @@ class OrderPayer {
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-        private const val QUEUE_SIZE_MULTIPLIER = 2
         private const val MAX_SCHEDULED_TASKS = 4000
         private const val CORE_POOL_SIZE = 2000
         private const val MAX_POOL_SIZE = 2000
@@ -31,8 +30,6 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val queueSize = CORE_POOL_SIZE * QUEUE_SIZE_MULTIPLIER
-
     private val rejectedCountingPolicy = RejectedExecutionHandler { r, executor ->
         throw RejectedExecutionException("Task rejected from $executor")
     }
@@ -40,7 +37,7 @@ class OrderPayer {
     private val immediateExecutor = ThreadPoolExecutor(
         CORE_POOL_SIZE, MAX_POOL_SIZE,
         0L, TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(queueSize),
+        SynchronousQueue(),
         NamedThreadFactory("order-immediate-executor"),
         rejectedCountingPolicy
     )
@@ -64,16 +61,6 @@ class OrderPayer {
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "Payment executor can't acquire a token",
-                HttpHeaders.EMPTY,
-                ByteArray(0),
-                null
-            )
-        }
-
-        if (immediateExecutor.queue.size >= queueSize) {
-            throw HttpClientErrorException.create(
-                HttpStatus.TOO_MANY_REQUESTS,
-                "Payment executor queue is full",
                 HttpHeaders.EMPTY,
                 ByteArray(0),
                 null
