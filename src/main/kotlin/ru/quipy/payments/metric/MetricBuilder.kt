@@ -4,6 +4,7 @@ import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
 import org.springframework.stereotype.Service
+import java.util.concurrent.BlockingQueue
 
 @Service
 class MetricBuilder(private val meterRegistry: MeterRegistry) {
@@ -56,6 +57,16 @@ class MetricBuilder(private val meterRegistry: MeterRegistry) {
         .publishPercentiles(0.5, 0.75, 0.9, 0.95, 0.99)
         .publishPercentileHistogram()
         .register(meterRegistry)
+
+    fun buildRejectCounter(accountName: String = ALL) = Counter.builder("executor tasks rejected")
+        .description("Number of tasks rejected due to queue overflow")
+        .tag(ACC, accountName)
+        .register(meterRegistry)
+
+    fun apply(q1: BlockingQueue<Runnable>, q2: BlockingQueue<Runnable>) {
+        meterRegistry.gauge("payment.executor.queue.size", q1) { it.size.toDouble() }
+        meterRegistry.gauge("okhttp.dispatcher.queue.size", q2) { it.size.toDouble() }
+    }
 
     companion object {
         private const val ACC = "acc"

@@ -1,6 +1,5 @@
 package ru.quipy.payments.logic
 
-
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
@@ -8,18 +7,23 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.web.client.HttpClientErrorException
-import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.ratelimiter.impl.tokenbucket.TokenBucketRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.util.*
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ScheduledThreadPoolExecutor
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.*
 
 @Service
 class OrderPayer {
+
+    companion object {
+        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
+        private const val QUEUE_SIZE_MULTIPLIER = 11
+        private const val MAX_SCHEDULED_TASKS = 4000
+        private const val CORE_POOL_SIZE = 100
+        private const val MAX_POOL_SIZE = 100
+    }
 
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
@@ -27,21 +31,35 @@ class OrderPayer {
     @Autowired
     private lateinit var paymentService: PaymentService
 
-    private val paymentExecutor = Scheduler
+    private val queueSize = CORE_POOL_SIZE * QUEUE_SIZE_MULTIPLIER
 
-    val rateLimiter = TokenBucketRateLimiter(500, 500, 1, TimeUnit.SECONDS)
+    private val rejectedCountingPolicy = RejectedExecutionHandler { r, executor ->
+        throw RejectedExecutionException("Task rejected from $executor")
+    }
+
+    private val immediateExecutor = ThreadPoolExecutor(
+        CORE_POOL_SIZE, MAX_POOL_SIZE,
+        0L, TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue(queueSize),
+        NamedThreadFactory("order-immediate-executor"),
+        rejectedCountingPolicy
+    )
+
+    private val scheduledExecutor = ScheduledThreadPoolExecutor(
+        10,
+        NamedThreadFactory("order-scheduled-executor")
+    ).apply {
+        removeOnCancelPolicy = true
+        rejectedExecutionHandler = RejectedExecutionHandler { r, executor ->
+            logger.error("Scheduled task rejected: $r")
+        }
+    }
+
+    private val scheduledTasksSemaphore = Semaphore(MAX_SCHEDULED_TASKS)
+
+    val rateLimiter = TokenBucketRateLimiter(4000, 5000, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
-        if (paymentExecutor.queue.remainingCapacity() == 0) {
-            throw HttpClientErrorException.create(
-                HttpStatus.TOO_MANY_REQUESTS,
-                "Payment executor queue is full",
-                HttpHeaders.EMPTY,
-                ByteArray(0),
-                null
-            )
-        }
-
         if (!rateLimiter.tick()) {
             throw HttpClientErrorException.create(
                 HttpStatus.TOO_MANY_REQUESTS,
@@ -52,20 +70,37 @@ class OrderPayer {
             )
         }
 
+        if (immediateExecutor.queue.size >= queueSize) {
+            throw HttpClientErrorException.create(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Payment executor queue is full",
+                HttpHeaders.EMPTY,
+                ByteArray(0),
+                null
+            )
+        }
+
         val createdAt = System.currentTimeMillis()
 
-        paymentExecutor.submit {
-            val createdEvent = paymentESService.create {
-                it.create(
-                    paymentId,
-                    orderId,
-                    amount
-                )
-            }
-            logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
+        try {
+            immediateExecutor.submit {
+                val createdEvent = paymentESService.create {
+                    it.create(paymentId, orderId, amount)
+                }
+                logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 
-            retryAsync(paymentId, amount, createdAt, deadline, attempt = 1)
+                retryAsync(paymentId, amount, createdAt, deadline, attempt = 1)
+            }
+        } catch (_: RejectedExecutionException) {
+            throw HttpClientErrorException.create(
+                HttpStatus.TOO_MANY_REQUESTS,
+                "Payment executor overloaded, please retry later",
+                HttpHeaders.EMPTY,
+                ByteArray(0),
+                null
+            )
         }
+
         return createdAt
     }
 
@@ -87,49 +122,32 @@ class OrderPayer {
         val paymentRequest = paymentService.submitPaymentRequest(paymentId, amount, createdAt, deadline)
         val start = System.currentTimeMillis()
 
-        process(paymentRequest, timeLeft, start, paymentId, attempt, deadline, amount, createdAt)
-    }
-
-    private fun process(
-        paymentRequest: CompletableFuture<Boolean>,
-        timeLeft: Long,
-        start: Long,
-        paymentId: UUID,
-        attempt: Int,
-        deadline: Long,
-        amount: Int,
-        createdAt: Long
-    ) {
         paymentRequest
             .orTimeout(timeLeft, TimeUnit.MILLISECONDS)
-            .whenCompleteAsync(
-                { success, error ->
-                    System.currentTimeMillis() - start
-
-                    when {
-                        error != null -> {
-                            logger.warn(
-                                "Payment $paymentId attempt #$attempt failed: ${error.message}, " +
-                                        "timeLeft=${deadline - System.currentTimeMillis()}ms"
-                            )
-                            scheduleProcess(paymentId, amount, createdAt, deadline, attempt)
-                        }
-
-                        success == true -> {
-                            logger.info("Payment $paymentId attempt #$attempt succeeded")
-                        }
-
-                        else -> {
-                            logger.info("Payment $paymentId attempt #$attempt returned failure")
-                            scheduleProcess(paymentId, amount, createdAt, deadline, attempt)
-                        }
+            .whenCompleteAsync({ success, error ->
+                val elapsed = System.currentTimeMillis() - start
+                when {
+                    error != null -> {
+                        logger.warn(
+                            "Payment $paymentId attempt #$attempt failed: ${error.message}, " +
+                                    "timeLeft=${deadline - System.currentTimeMillis()}ms, elapsed=${elapsed}ms"
+                        )
+                        scheduleRetry(paymentId, amount, createdAt, deadline, attempt)
                     }
-                },
-                paymentExecutor,
-            )
+
+                    success == true -> {
+                        logger.info("Payment $paymentId attempt #$attempt succeeded, elapsed=${elapsed}ms")
+                    }
+
+                    else -> {
+                        logger.info("Payment $paymentId attempt #$attempt returned failure, elapsed=${elapsed}ms")
+                        scheduleRetry(paymentId, amount, createdAt, deadline, attempt)
+                    }
+                }
+            }, immediateExecutor)
     }
 
-    private fun scheduleProcess(
+    private fun scheduleRetry(
         paymentId: UUID,
         amount: Int,
         createdAt: Long,
@@ -143,28 +161,26 @@ class OrderPayer {
             return
         }
 
-        paymentExecutor.schedule(
-            {
-                retryAsync(paymentId, amount, createdAt, deadline, attempt + 1)
-            },
-            100L,
-            TimeUnit.MILLISECONDS
-        )
-    }
+        if (!scheduledTasksSemaphore.tryAcquire()) {
+            logger.error("Too many scheduled retries for payment $paymentId, dropping retry #${attempt + 1}")
+            return
+        }
 
-    companion object {
-        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-    }
-}
-
-object Scheduler : ScheduledThreadPoolExecutor(
-    2000,
-    NamedThreadFactory("payment-submission-executor")
-) {
-    init {
-        setMaximumPoolSize(2000)
-        setKeepAliveTime(0L, TimeUnit.MILLISECONDS)
-        setRejectedExecutionHandler(CallerBlockingRejectedExecutionHandler())
-        removeOnCancelPolicy = true
+        try {
+            scheduledExecutor.schedule(
+                {
+                    try {
+                        retryAsync(paymentId, amount, createdAt, deadline, attempt + 1)
+                    } finally {
+                        scheduledTasksSemaphore.release()
+                    }
+                },
+                100L,
+                TimeUnit.MILLISECONDS
+            )
+        } catch (e: RejectedExecutionException) {
+            scheduledTasksSemaphore.release()
+            logger.error("Failed to schedule retry for payment $paymentId attempt #${attempt + 1}: queue full")
+        }
     }
 }

@@ -2,12 +2,14 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.micrometer.core.instrument.Counter
 import kotlinx.coroutines.*
 import kotlinx.coroutines.future.future
 import okhttp3.*
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -19,6 +21,9 @@ import java.util.*
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionHandler
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -36,10 +41,36 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
+    private val rejectedCountingPolicy = RejectedExecutionHandler { r, executor ->
+        rejectedTasksCounter.increment()
+        if (!executor.isShutdown) {
+            r.run()
+        }
+    }
+
+    private val paymentExecutor = ThreadPoolExecutor(
+        parallelRequests,
+        parallelRequests,
+        0L, TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue(parallelRequests * 2),
+        NamedThreadFactory("payment-submission-executor"),
+        rejectedCountingPolicy
+    ).apply {
+        allowCoreThreadTimeOut(false)
+    }
+
+    private val okHttpExecutor = ThreadPoolExecutor(
+        parallelRequests,
+        parallelRequests,
+        0L, TimeUnit.MILLISECONDS,
+        LinkedBlockingQueue(parallelRequests * 2),
+        NamedThreadFactory("okhttp-dispatcher-executor"),
+        rejectedCountingPolicy
+    )
+
     private val client = OkHttpClient.Builder()
-        .readTimeout(Duration.ofSeconds(30))
-        .callTimeout(Duration.ofSeconds(35))
-        .dispatcher(Dispatcher(Executors.newFixedThreadPool(parallelRequests)).apply {
+        .readTimeout(Duration.ofMillis(1000L))
+        .dispatcher(Dispatcher(okHttpExecutor).apply {
             maxRequests = parallelRequests * 2
             maxRequestsPerHost = parallelRequests * 2
         })
@@ -78,6 +109,11 @@ class PaymentExternalSystemAdapterImpl(
         metricBuilder.buildRetryCounter(properties.accountName)
     private val outgoingRequestProcessingTimeDistributionSummary =
         metricBuilder.buildOutgoingRequestProcessingTimeDistributionSummary()
+    private val rejectedTasksCounter = metricBuilder.buildRejectCounter(properties.accountName)
+
+    init {
+        metricBuilder.apply(paymentExecutor.queue, okHttpExecutor.queue)
+    }
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long): CompletableFuture<Boolean> {
         httpRequestsTotalAccountCounter.increment()
