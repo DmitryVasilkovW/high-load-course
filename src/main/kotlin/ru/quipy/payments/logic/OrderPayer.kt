@@ -19,10 +19,10 @@ class OrderPayer {
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-        private const val QUEUE_SIZE_MULTIPLIER = 11
+        private const val QUEUE_SIZE_MULTIPLIER = 2
         private const val MAX_SCHEDULED_TASKS = 4000
-        private const val CORE_POOL_SIZE = 100
-        private const val MAX_POOL_SIZE = 100
+        private const val CORE_POOL_SIZE = 2000
+        private const val MAX_POOL_SIZE = 2000
     }
 
     @Autowired
@@ -57,7 +57,7 @@ class OrderPayer {
 
     private val scheduledTasksSemaphore = Semaphore(MAX_SCHEDULED_TASKS)
 
-    val rateLimiter = TokenBucketRateLimiter(4000, 5000, 1, TimeUnit.SECONDS)
+    val rateLimiter = TokenBucketRateLimiter(3500, 3500, 1, TimeUnit.SECONDS)
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         if (!rateLimiter.tick()) {
