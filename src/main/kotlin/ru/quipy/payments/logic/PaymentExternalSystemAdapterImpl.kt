@@ -9,8 +9,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
-import ru.quipy.core.EventSourcingService
-import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metric.MetricBuilder
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
@@ -22,11 +20,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.math.max
 
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
-    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     paymentProviderHostPort: String,
     token: String,
     metricBuilder: MetricBuilder,
@@ -207,16 +203,6 @@ class PaymentExternalSystemAdapterImpl(
                     paymentId,
                     body.result
                 )
-
-                paymentScope.launch {
-                    try {
-                        paymentESService.update(paymentId) {
-                            it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                        }
-                    } catch (e: Exception) {
-                        logger.error("[{}] Failed to update payment {} in DB", accountName, paymentId, e)
-                    }
-                }
 
                 httpHandledRequestsTotalAccountCounter.increment()
                 val processingTime = now() - startTime
