@@ -63,11 +63,6 @@ class MetricBuilder(private val meterRegistry: MeterRegistry) {
         .tag(ACC, accountName)
         .register(meterRegistry)
 
-    fun apply(q1: BlockingQueue<Runnable>, q2: BlockingQueue<Runnable>) {
-        meterRegistry.gauge("payment.executor.queue.size", q1) { it.size.toDouble() }
-        meterRegistry.gauge("okhttp.dispatcher.queue.size", q2) { it.size.toDouble() }
-    }
-
     companion object {
         private const val ACC = "acc"
         private const val ALL = "all"
