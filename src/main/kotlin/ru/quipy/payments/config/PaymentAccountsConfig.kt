@@ -8,20 +8,19 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
-import ru.quipy.payments.logic.*
+import ru.quipy.payments.logic.PaymentAccountProperties
+import ru.quipy.payments.logic.PaymentAggregateState
+import ru.quipy.payments.logic.PaymentExternalSystemAdapter
+import ru.quipy.payments.logic.PaymentExternalSystemAdapterImpl
+import ru.quipy.payments.metric.MetricBuilder
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.util.*
 
-
 @Configuration
 class PaymentAccountsConfig {
-    companion object {
-        private val javaClient = HttpClient.newBuilder().build()
-        private val mapper = ObjectMapper().registerKotlinModule().registerModules(JavaTimeModule())
-    }
 
     @Value("\${payment.hostPort}")
     lateinit var paymentProviderHostPort: String
@@ -36,9 +35,12 @@ class PaymentAccountsConfig {
     lateinit var allowedAccounts: List<String>
 
     @Bean
-    fun accountAdapters(paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>): List<PaymentExternalSystemAdapter> {
+    fun accountAdapters(
+        paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+        metricBuilder: MetricBuilder,
+    ): List<PaymentExternalSystemAdapter> {
         val request = HttpRequest.newBuilder()
-            .uri(URI("http://${paymentProviderHostPort}/external/accounts?serviceName=$serviceName&token=$token"))
+            .uri(URI("http://$paymentProviderHostPort/external/accounts?serviceName=$serviceName&token=$token"))
             .GET()
             .build()
 
@@ -47,7 +49,7 @@ class PaymentAccountsConfig {
         println("\nPayment accounts list:")
         return mapper.readValue<List<PaymentAccountProperties>>(
             resp.body(),
-            mapper.typeFactory.constructCollectionType(List::class.java, PaymentAccountProperties::class.java)
+            mapper.typeFactory.constructCollectionType(List::class.java, PaymentAccountProperties::class.java),
         )
             .filter { it.accountName in allowedAccounts }
             .map { it.copy(enabled = true) }
@@ -57,8 +59,14 @@ class PaymentAccountsConfig {
                     it,
                     paymentService,
                     paymentProviderHostPort,
-                    token
+                    token,
+                    metricBuilder,
                 )
             }
+    }
+
+    companion object {
+        private val javaClient = HttpClient.newBuilder().build()
+        private val mapper = ObjectMapper().registerKotlinModule().registerModules(JavaTimeModule())
     }
 }

@@ -4,7 +4,7 @@ import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicInteger
 
 class OngoingWindow(
-    maxWinSize: Int
+    maxWinSize: Int,
 ) {
     private val window = Semaphore(maxWinSize)
 
@@ -18,7 +18,7 @@ class OngoingWindow(
 }
 
 class NonBlockingOngoingWindow(
-    private val maxWinSize: Int
+    private val maxWinSize: Int,
 ) {
     private val winSize = AtomicInteger()
 
@@ -38,14 +38,13 @@ class NonBlockingOngoingWindow(
 
     fun releaseWindow() = winSize.decrementAndGet()
 
-
     sealed class WindowResponse(val currentWinSize: Int) {
         public class Success(
-            currentWinSize: Int
+            currentWinSize: Int,
         ) : WindowResponse(currentWinSize)
 
         public class Fail(
-            currentWinSize: Int
+            currentWinSize: Int,
         ) : WindowResponse(currentWinSize)
     }
 }
