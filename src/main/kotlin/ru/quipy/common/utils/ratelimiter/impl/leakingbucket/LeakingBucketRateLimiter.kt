@@ -1,14 +1,15 @@
-package ru.quipy.common.utils
+package ru.quipy.common.utils.ratelimiter.impl.leakingbucket
 
+import java.time.Duration
+import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.time.Duration
-import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
+import ru.quipy.common.utils.ratelimiter.RateLimiter
 
 class LeakingBucketRateLimiter(
     private val rate: Long,
@@ -22,14 +23,24 @@ class LeakingBucketRateLimiter(
         return queue.offer(1)
     }
 
-    private val releaseJob = rateLimiterScope.launch {
-        while (true) {
-            delay(window.toMillis())
-            for (i in 0..rate) {
-                queue.poll()
+    init {
+        rateLimiterScope.launch {
+            while (true) {
+                delay(window.toMillis())
+                repeatLong(rate + 1) {
+                    queue.poll()
+                }
             }
+        }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
+    }
+
+    private inline fun repeatLong(times: Long, action: () -> Unit) {
+        var count = 0L
+        while (count < times) {
+            action()
+            count++
         }
-    }.invokeOnCompletion { th -> if (th != null) logger.error("Rate limiter release job completed", th) }
+    }
 
     companion object {
         private val logger: Logger = LoggerFactory.getLogger(LeakingBucketRateLimiter::class.java)

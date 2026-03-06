@@ -29,7 +29,7 @@ class PaymentTransactionsSubscriber {
         subscriptionsManager.createSubscriber(
             PaymentAggregate::class,
             "payments:payment-processings-subscriber",
-            retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)
+            retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT),
         ) {
             `when`(PaymentProcessedEvent::class) { event ->
                 paymentLog.computeIfAbsent(event.orderId) {
@@ -40,7 +40,7 @@ class PaymentTransactionsSubscriber {
                         status = if (event.success) PaymentStatus.SUCCESS else PaymentStatus.FAILED,
                         event.amount,
                         event.paymentId,
-                    )
+                    ),
                 )
             }
         }
@@ -55,6 +55,6 @@ class PaymentTransactionsSubscriber {
 
     enum class PaymentStatus {
         FAILED,
-        SUCCESS
+        SUCCESS,
     }
 }
