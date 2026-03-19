@@ -2,50 +2,26 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import java.io.IOException
-import java.io.InterruptedIOException
-import java.net.SocketTimeoutException
-import java.time.Duration
-import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.RejectedExecutionHandler
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.ThreadPoolExecutor
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.sync.Semaphore
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
-import okhttp3.HttpUrl
-import okhttp3.OkHttpClient
-import okhttp3.Request
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
+import okhttp3.*
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.ratelimiter.impl.slidingwindow.SlidingWindowRateLimiter
-import ru.quipy.core.EventSourcingService
-import ru.quipy.payments.api.PaymentAggregate
-import ru.quipy.payments.metric.MetricBuilder
+import java.io.IOException
+import java.time.Duration
+import java.util.*
+import java.util.concurrent.*
+import kotlin.math.pow
 
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
-    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     paymentProviderHostPort: String,
     token: String,
-    metricBuilder: MetricBuilder,
 ) : PaymentExternalSystemAdapter, AutoCloseable {
+
     private val serviceName = properties.serviceName
     private val accountName = properties.accountName
     private val rateLimitPerSec = properties.rateLimitPerSec
@@ -66,9 +42,9 @@ class PaymentExternalSystemAdapterImpl(
         rejectedCountingPolicy
     )
 
-    private val scheduler = Executors.newScheduledThreadPool(
-        1,
-        NamedThreadFactory("hedge-scheduler-${accountName}")
+    private val hedgeExecutor = ScheduledThreadPoolExecutor(
+        4,
+        NamedThreadFactory("hedge-executor-${accountName}")
     )
 
     private val client = OkHttpClient.Builder()
@@ -81,6 +57,7 @@ class PaymentExternalSystemAdapterImpl(
         .build()
 
     private val rateLimiter = SlidingWindowRateLimiter(rateLimitPerSec.toLong(), Duration.ofSeconds(1))
+    private val semaphore = Semaphore(parallelRequests)
 
     private val host = parseHost(paymentProviderHostPort)
     private val port = parsePort(paymentProviderHostPort)
@@ -90,13 +67,18 @@ class PaymentExternalSystemAdapterImpl(
         "accountName" to accountName,
     )
 
-    private val coroutineDispatcher = Executors.newFixedThreadPool(parallelRequests).asCoroutineDispatcher()
-    private val paymentScope = CoroutineScope(coroutineDispatcher + SupervisorJob())
-    private val semaphore = Semaphore(permits = parallelRequests)
-
-    private val hedgeDelayMs = 200L
-    private val hedgeSafetyMarginMs = 500L
-    private val minTimeForHedge = hedgeDelayMs + hedgeSafetyMarginMs
+    private val circuitBreaker = CircuitBreakerRegistry.of(
+        CircuitBreakerConfig.custom()
+            .failureRateThreshold(50f)
+            .slowCallRateThreshold(50f)
+            .slowCallDurationThreshold(Duration.ofMillis(500))
+            .minimumNumberOfCalls(10)
+            .slidingWindowType(CircuitBreakerConfig.SlidingWindowType.COUNT_BASED)
+            .slidingWindowSize(50)
+            .waitDurationInOpenState(Duration.ofSeconds(1))
+            .permittedNumberOfCallsInHalfOpenState(3)
+            .build()
+    ).circuitBreaker(accountName)
 
     override fun performPaymentAsync(
         paymentId: UUID,
@@ -104,153 +86,106 @@ class PaymentExternalSystemAdapterImpl(
         paymentStartedAt: Long,
         deadline: Long
     ): CompletableFuture<Boolean> {
-        logger.warn("[$accountName] Submitting payment request for operation $paymentId")
-
-        val retries = AtomicInteger(1)
-        val traceId = UUID.randomUUID()
-        val promise = CompletableFuture<Boolean>()
-        val isCompleted = AtomicBoolean(false)
-        var cancellationTimer: ScheduledFuture<*>? = null
-
-        logger.info("[$accountName] Submit: $paymentId , traceId: $traceId")
-
-        val timeLeft = deadline - now()
-        if (timeLeft <= 0) {
-            return promise.also { it.complete(false) }
-        }
-
-        executeAttempt(traceId, paymentId, isCompleted, promise, amount, retries)
-
-        if (timeLeft > minTimeForHedge) {
-            retries.incrementAndGet()
-            cancellationTimer = scheduler.schedule({
-                if (!isCompleted.get()) {
-                    logger.info("[$accountName] Sending hedged request for operation $paymentId, traceId: $traceId")
-                    executeAttempt(traceId, paymentId, isCompleted, promise, amount, retries, cancellationTimer)
-                }
-            }, hedgeDelayMs, TimeUnit.MILLISECONDS)
-        }
-
-        return promise
+        return performPaymentAsyncWithRetry(paymentId, amount, paymentStartedAt, deadline, 1)
     }
 
-    fun executeAttempt(
-        traceId: UUID,
-        operationId: UUID,
-        isCompleted: AtomicBoolean,
-        promise: CompletableFuture<Boolean>,
+    private fun performPaymentAsyncWithRetry(
+        paymentId: UUID,
         amount: Int,
-        retries: AtomicInteger,
-        cancellationTimer: ScheduledFuture<*>? = null,
-    ) {
-        if (!semaphore.tryAcquire()) {
-            Thread.currentThread().interrupt()
-            if (isCompleted.compareAndSet(false, true)) {
-                promise.complete(false)
-            }
-            return
+        paymentStartedAt: Long,
+        deadline: Long,
+        attempt: Int
+    ): CompletableFuture<Boolean> {
+        logger.warn("[$accountName] Submitting payment request for operation $paymentId, attempt $attempt")
+
+        val now = now()
+        if (now >= deadline) {
+            return CompletableFuture.completedFuture(false)
         }
 
-        rateLimiter.tickBlocking()
-        val request = getPaymentRequest(traceId, operationId, amount)
-        val context = AttemptData(
-            traceId,
-            operationId,
-            isCompleted,
-            promise,
-            retries,
-            cancellationTimer
-        )
-        client.newCall(request).enqueue(ResponseHandler(context))
-    }
+        val future = CompletableFuture<Boolean>()
+        val transactionId = UUID.randomUUID()
 
-    private inner class ResponseHandler(
-        private val ctx: AttemptData
-    ) : Callback {
+        val protectedFuture = executeWithHedging(paymentId, amount, transactionId)
 
-        override fun onResponse(call: Call, response: Response) {
-            try {
-                response.use { resp ->
-                    val body = runCatching {
-                        mapper.readValue(resp.body?.string(), ExternalSysResponse::class.java)
-                    }.getOrElse { e ->
-                        logger.error(
-                            "[$accountName] [ERROR] Payment processed for traceId:" +
-                                    "${ctx.traceId}, operation: ${ctx.operationId}," +
-                                    "result code: ${resp.code}," +
-                                    "reason: ${resp.body?.string()}"
+        protectedFuture.whenComplete { result, throwable ->
+            val currentTime = now()
+            if (throwable != null) {
+                logger.error("[$accountName] Payment attempt $attempt failed for $paymentId", throwable)
+                if (currentTime < deadline && attempt < MAX_RETRIES) {
+                    val delayMs = calculateBackoff(attempt)
+                    logger.info("[$accountName] Scheduling retry $attempt for $paymentId in ${delayMs}ms")
+                    hedgeExecutor.schedule({
+                        val retryFuture = performPaymentAsyncWithRetry(
+                            paymentId,
+                            amount,
+                            paymentStartedAt,
+                            deadline,
+                            attempt + 1
                         )
-                        ExternalSysResponse(ctx.traceId.toString(), ctx.operationId.toString(), false, e.message)
-                    }
-
-                    logger.warn(
-                        "[$accountName] Payment processed for traceId: ${ctx.traceId}," +
-                                "operation: ${ctx.operationId}," +
-                                "succeeded: ${body.result}," +
-                                "message: ${body.message}"
-                    )
-
-                    tryComplete(body.result)
+                        retryFuture.whenComplete { retryResult, retryThrowable ->
+                            if (retryThrowable != null) {
+                                future.completeExceptionally(retryThrowable)
+                            } else {
+                                future.complete(retryResult)
+                            }
+                        }
+                    }, delayMs, TimeUnit.MILLISECONDS)
+                } else {
+                    future.completeExceptionally(throwable)
                 }
-            } catch (e: Exception) {
-                logger.error("[$accountName] Error processing response for operation ${ctx.operationId}", e)
-                handleAttemptFailure()
-            } finally {
-                semaphore.release()
+            } else {
+                future.complete(result)
             }
         }
 
-        override fun onFailure(call: Call, e: IOException) {
-            try {
-                when (e) {
-                    is SocketTimeoutException -> logger.error(
-                        "[$accountName] Payment socket timeout for traceId: ${ctx.traceId}, operation: ${ctx.operationId}",
-                        e
-                    )
-
-                    is InterruptedIOException -> logger.error(
-                        "[$accountName] Payment interrupted (timeout/cancel) for traceId: ${ctx.traceId}, operation: ${ctx.operationId}",
-                        e
-                    )
-
-                    else -> logger.error(
-                        "[$accountName] Payment failed for traceId: ${ctx.traceId}, operation: ${ctx.operationId}",
-                        e
-                    )
-                }
-                handleAttemptFailure()
-            } catch (ex: Exception) {
-                logger.error("[$accountName] Error in onFailure for operation ${ctx.operationId}", ex)
-                handleAttemptFailure()
-            } finally {
-                semaphore.release()
-            }
-        }
-
-        private fun handleAttemptFailure() {
-            if (ctx.remainingAttempts.decrementAndGet() == 0) {
-                tryComplete(false)
-            }
-        }
-
-        private fun tryComplete(value: Boolean) {
-            if (ctx.finished.compareAndSet(false, true)) {
-                ctx.resultFuture.complete(value)
-                ctx.cancellationHandle?.cancel(false)
-            }
-        }
+        return future
     }
 
-    private data class AttemptData(
-        val traceId: UUID,
-        val operationId: UUID,
-        val finished: AtomicBoolean,
-        val resultFuture: CompletableFuture<Boolean>,
-        val remainingAttempts: AtomicInteger,
-        val cancellationHandle: ScheduledFuture<*>?,
-    )
+    private fun calculateBackoff(attempt: Int): Long {
+        val base = 100L
+        return (base * 2.0.pow((attempt - 1).toDouble())).toLong()
+    }
 
-    private fun getPaymentRequest(transactionId: UUID, paymentId: UUID, amount: Int): Request {
+    private fun executeWithHedging(
+        paymentId: UUID,
+        amount: Int,
+        transactionId: UUID
+    ): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
+        val request = createRequest(paymentId, amount, transactionId)
+
+        val firstFuture = sendRequestProtected(request, paymentId, transactionId)
+        firstFuture.whenComplete { result, throwable ->
+            if (!future.isDone) {
+                if (throwable != null) {
+                    future.completeExceptionally(throwable)
+                } else {
+                    future.complete(result)
+                }
+            }
+        }
+
+        hedgeExecutor.schedule({
+            if (!future.isDone) {
+                logger.warn("[$accountName] Hedged request for payment $paymentId, txId: $transactionId")
+                val hedgedFuture = sendRequestProtected(request, paymentId, transactionId)
+                hedgedFuture.whenComplete { result, throwable ->
+                    if (!future.isDone) {
+                        if (throwable != null) {
+                            future.completeExceptionally(throwable)
+                        } else {
+                            future.complete(result)
+                        }
+                    }
+                }
+            }
+        }, HEDGE_DELAY_MS, TimeUnit.MILLISECONDS)
+
+        return future
+    }
+
+    private fun createRequest(paymentId: UUID, amount: Int, transactionId: UUID): Request {
         return Request.Builder().run {
             val url = HttpUrl.Builder()
                 .scheme("http")
@@ -264,27 +199,79 @@ class PaymentExternalSystemAdapterImpl(
                     addQueryParameter("amount", amount.toString())
                 }
                 .build()
-
             url(url).post(emptyBody)
         }.build()
     }
 
+    private fun sendRequestProtected(
+        request: Request,
+        paymentId: UUID,
+        transactionId: UUID
+    ): CompletableFuture<Boolean> {
+        return circuitBreaker.executeCompletionStage {
+            sendRequestInternal(request, paymentId, transactionId)
+        }.toCompletableFuture()
+    }
+
+    private fun sendRequestInternal(
+        request: Request,
+        paymentId: UUID,
+        transactionId: UUID,
+    ): CompletableFuture<Boolean> {
+        val future = CompletableFuture<Boolean>()
+
+        try {
+            semaphore.acquire()
+            rateLimiter.tickBlocking()
+        } catch (e: InterruptedException) {
+            future.completeExceptionally(e)
+            return future
+        }
+
+        logger.info("[$accountName] Sending request payment=$paymentId txId=$transactionId")
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onResponse(call: Call, response: Response) {
+                try {
+                    response.use { resp ->
+                        val body = try {
+                            mapper.readValue(resp.body?.string(), ExternalSysResponse::class.java)
+                        } catch (e: Exception) {
+                            logger.error(
+                                "[$accountName] Failed to parse response payment=$paymentId txId=$transactionId",
+                                e
+                            )
+                            throw e
+                        }
+                        logger.info("[$accountName] Response received payment=$paymentId txId=$transactionId success=${body.result}")
+                        future.complete(body.result)
+                    }
+                } catch (e: Exception) {
+                    logger.error("[$accountName] Error processing response payment=$paymentId txId=$transactionId", e)
+                    future.completeExceptionally(e)
+                } finally {
+                    semaphore.release()
+                }
+            }
+
+            override fun onFailure(call: Call, e: IOException) {
+                logger.error("[$accountName] Request failed payment=$paymentId txId=$transactionId", e)
+                future.completeExceptionally(e)
+                semaphore.release()
+            }
+        })
+
+        return future
+    }
+
     private fun parseHost(hostPort: String): String {
         val parts = hostPort.split(":")
-        return if (parts.size == 2) {
-            parts[0]
-        } else {
-            hostPort
-        }
+        return if (parts.size == 2) parts[0] else hostPort
     }
 
     private fun parsePort(hostPort: String): Int {
         val parts = hostPort.split(":")
-        return if (parts.size == 2) {
-            parts[1].toInt()
-        } else {
-            PORT
-        }
+        return if (parts.size == 2) parts[1].toInt() else PORT
     }
 
     override fun price() = properties.price
@@ -295,18 +282,18 @@ class PaymentExternalSystemAdapterImpl(
     override fun name() = properties.accountName
 
     override fun close() {
-        paymentScope.cancel()
         client.dispatcher.executorService.shutdown()
-        (coroutineDispatcher.executor as? ExecutorService)?.shutdown()
+        hedgeExecutor.shutdown()
     }
-
-    private fun now() = System.currentTimeMillis()
 
     companion object {
         val logger: Logger = LoggerFactory.getLogger(PaymentExternalSystemAdapter::class.java)
         val emptyBody = ByteArray(0).toRequestBody(null)
         val mapper = ObjectMapper().registerKotlinModule()
         private const val PORT = 80
-        private const val MAX_ATTEMPT_TIME = 30000L
+        private const val MAX_RETRIES = 3
+        private const val HEDGE_DELAY_MS = 120L
     }
 }
+
+private fun now() = System.currentTimeMillis()
