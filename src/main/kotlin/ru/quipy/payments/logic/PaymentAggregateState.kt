@@ -34,7 +34,12 @@ class PaymentAggregateState : AggregateState<UUID, PaymentAggregate> {
 
     @StateTransitionFunc
     fun paymentSubmittedApply(event: PaymentSubmittedEvent) {
-        submissions[event.transactionId] = PaymentSubmission(event.startedAt, event.transactionId, event.success, event.spentInQueueDuration)
+        submissions[event.transactionId] = PaymentSubmission(
+            timeStarted = event.startedAt,
+            transactionId = event.transactionId,
+            success = event.success,
+            spentInQueue = event.spentInQueueDuration,
+        )
         updatedAt = createdAt
     }
 
@@ -45,7 +50,7 @@ class PaymentAggregateState : AggregateState<UUID, PaymentAggregate> {
             event.processedAt,
             event.transactionId,
             event.reason,
-            event.success
+            event.success,
         )
         updatedAt = createdAt
     }

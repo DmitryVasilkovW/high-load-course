@@ -14,7 +14,6 @@ import ru.quipy.payments.logic.PaymentAggregateState
 import ru.quipy.streams.AggregateEventStreamManager
 import java.util.*
 
-
 /**
  * This files contains some configurations that you might want to have in your project. Some configurations are
  * made in for the sake of demonstration and not required for the library functioning. Usually you can have even
@@ -71,10 +70,17 @@ class EventSourcingLibConfiguration {
         val jettyServletWebServerFactory = JettyServletWebServerFactory()
 
         val c = JettyServerCustomizer {
-            (it.connectors[0].getConnectionFactory("h2c") as HTTP2CServerConnectionFactory).maxConcurrentStreams = 10_000_000
+            (
+                it.connectors[0].getConnectionFactory("h2c")
+                    as HTTP2CServerConnectionFactory
+                ).maxConcurrentStreams = MAX_CONCURRENT_STREAMS
         }
 
         jettyServletWebServerFactory.serverCustomizers.add(c)
         return jettyServletWebServerFactory
+    }
+
+    companion object {
+        private const val MAX_CONCURRENT_STREAMS = 10_000_000
     }
 }
